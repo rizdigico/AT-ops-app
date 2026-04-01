@@ -1,0 +1,50 @@
+@import "tailwindcss";
+
+@theme {
+  --color-background: #020b14;
+  --color-foreground: #e2f1fa;
+  
+  --color-card: #041221;
+  --color-card-border: #0a2540;
+  
+  --color-status-on-time: #00f3ff;
+  --color-status-delayed: #ffaa00;
+  --color-status-cancelled: #ff003c;
+
+  --font-sans: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-geist-mono), ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+
+@layer base {
+  *,
+  ::after,
+  ::before,
+  ::backdrop,
+  ::file-selector-button {
+    border-color: var(--color-card-border, currentColor);
+  }
+}
+
+:root {
+  background-color: var(--color-background);
+  color: var(--color-foreground);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+body {
+  background-color: var(--color-background);
+  color: var(--color-foreground);
+  margin: 0;
+  overflow-x: hidden;
+}
+
+@layer utilities {
+  .glass {
+    @apply bg-card/60 backdrop-blur-xl border border-card-border;
+  }
+  .glass-card {
+    @apply bg-card/80 backdrop-blur-md border border-card-border shadow-[0_4px_30px_rgba(0,0,0,0.5)];
+  }
+}
