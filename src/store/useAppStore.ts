@@ -88,17 +88,21 @@ export function mapDbFlight(row: DbFlight): Flight {
 interface AppState {
   flights: Flight[];
   isLoading: boolean;
+  isDeployed: boolean;
   setFlights: (flights: Flight[]) => void;
   setLoading: (v: boolean) => void;
+  setIsDeployed: (v: boolean) => void;
   applyRealtimeEvent: (event: "INSERT" | "UPDATE" | "DELETE", row: DbFlight) => void;
 }
 
 export const useAppStore = create<AppState>((set) => ({
   flights: [],
   isLoading: true,
+  isDeployed: false,
 
   setFlights: (flights) => set({ flights }),
   setLoading: (v) => set({ isLoading: v }),
+  setIsDeployed: (v) => set({ isDeployed: v }),
 
   applyRealtimeEvent: (event, row) =>
     set((state) => {
