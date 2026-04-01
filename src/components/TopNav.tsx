@@ -1,9 +1,13 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Plane, Menu, Bell } from "lucide-react";
+import { Plane, Menu, Bell, UploadCloud } from "lucide-react";
 
-export function TopNav() {
+interface TopNavProps {
+  onUploadClick?: () => void;
+}
+
+export function TopNav({ onUploadClick }: TopNavProps) {
   const [time, setTime] = useState<string>("");
 
   useEffect(() => {
@@ -33,6 +37,22 @@ export function TopNav() {
           <div>
             <h1 className="font-semibold text-sm tracking-tight leading-none text-white">AT Dispatch</h1>
             <p className="text-[10px] text-zinc-400 mt-0.5 tracking-wider uppercase font-mono">Command Center</p>
+          </div>
+
+          {/* Upload icon — sits right beside the title */}
+          <div className="relative group ml-1">
+            <button
+              onClick={onUploadClick}
+              className="flex items-center justify-center w-7 h-7 rounded-md text-zinc-500 hover:text-white hover:bg-white/10 transition-all"
+              aria-label="Upload schedule"
+            >
+              <UploadCloud className="w-4 h-4" />
+            </button>
+            {/* Tooltip */}
+            <div className="pointer-events-none absolute left-1/2 -translate-x-1/2 top-full mt-2 w-44 rounded-md bg-zinc-900 border border-zinc-700 px-3 py-2 text-[10px] text-zinc-300 leading-relaxed opacity-0 group-hover:opacity-100 transition-opacity z-50 shadow-xl">
+              <p className="font-semibold text-white mb-0.5">Upload Schedule</p>
+              Accepts weekly <span className="text-[#00f3ff]">.xlsx</span> or <span className="text-[#00f3ff]">.csv</span> transfer files
+            </div>
           </div>
         </div>
 
