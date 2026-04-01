@@ -20,6 +20,12 @@ export interface Flight {
   status: TransferStatus;
 }
 
+// Extended type used by 3D visualisation components
+export interface CyberFlight extends Flight {
+  progress?: number;
+  isPulsingNode?: boolean;
+}
+
 // Raw Supabase row (mirrors the DB schema exactly)
 export interface DbFlight {
   id: string;
