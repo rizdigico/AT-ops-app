@@ -77,8 +77,12 @@ export function parseAndEnforceSGTime(
       hours = Math.floor(totalMins / 60) % 24;
       minutes = totalMins % 60;
     } else if (timeValue instanceof Date) {
-      hours = timeValue.getHours();
-      minutes = timeValue.getMinutes();
+      // xlsx stores time fractions as UTC Date objects (e.g. 06:04 in spreadsheet
+      // → 1899-12-30T06:04:35.000Z). Must use UTC accessors — getHours() applies
+      // the local timezone offset and shifts every time by +8h on a UTC+8 machine,
+      // which is what caused 00:01 in Excel to appear as 08:01 in the app.
+      hours = timeValue.getUTCHours();
+      minutes = timeValue.getUTCMinutes();
     } else if (typeof timeValue === "string") {
       const match = timeValue.trim().match(/^(\d{1,2}):(\d{2})/);
       if (match) {
