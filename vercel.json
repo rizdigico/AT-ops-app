@@ -3,6 +3,7 @@
   "buildCommand": "npm run build",
   "outputDirectory": ".next",
   "installCommand": "npm install",
+  "engines": { "node": "20.x" },
   "crons": [
     {
       "path": "/api/cron/sync-flights",
