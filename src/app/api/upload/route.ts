@@ -161,33 +161,70 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // Deduplicate within the batch by composite key (file_ref + scheduled_time).
-    // A booking (file_ref) can have multiple legs at different times — those are
-    // distinct rows. Only skip true duplicates (same ref AND same time).
-    // PostgreSQL throws "cannot affect row a second time" if the same key
-    // appears more than once in a single upsert payload.
+    // Deduplicate within the batch: keep only the last occurrence of each
+    // (file_ref, scheduled_time) pair so the INSERT below never hits
+    // "cannot affect row a second time".
     const seen = new Map<string, typeof records[0]>();
     for (const r of records) seen.set(`${r.file_ref}|${r.scheduled_time}`, r);
     const deduped = Array.from(seen.values());
 
-    // Upsert — on duplicate (file_ref, scheduled_time), update all fields except
-    // notified so re-uploading the same week doesn't reset WhatsApp tracking.
-    const { error } = await supabaseAdmin
-      .from("flights")
-      .upsert(deduped, {
-        onConflict: "file_ref,scheduled_time",
-        ignoreDuplicates: false,
-      });
+    // ── Delete-then-insert strategy ──────────────────────────────────────────
+    // Using upsert with onConflict:"file_ref,scheduled_time" requires that exact
+    // composite unique constraint to exist in the DB. If the old single-column
+    // "file_ref" constraint is still active, every multi-leg booking (same
+    // file_ref, different dates) silently fails for legs 2+.
+    //
+    // Instead: delete ALL existing rows for the file_refs in this batch, then
+    // insert fresh. This works regardless of which constraint is present.
+    // The notified flag is preserved: we snapshot which (file_ref, scheduled_time)
+    // pairs were already notified before deleting, then restore that flag on insert.
 
-    if (error) {
-      console.error("[upload] Supabase upsert error:", error);
+    const batchFileRefs = [...new Set(deduped.map((r) => r.file_ref))];
+
+    // 1. Snapshot notified pairs
+    const { data: notifiedRows } = await supabaseAdmin
+      .from("flights")
+      .select("file_ref, scheduled_time")
+      .in("file_ref", batchFileRefs)
+      .eq("notified", true);
+
+    const notifiedSet = new Set(
+      (notifiedRows ?? []).map((r) => `${r.file_ref}|${r.scheduled_time}`)
+    );
+
+    // 2. Delete all existing rows for these file_refs
+    const { error: deleteError } = await supabaseAdmin
+      .from("flights")
+      .delete()
+      .in("file_ref", batchFileRefs);
+
+    if (deleteError) {
+      console.error("[upload] Delete error:", deleteError);
       return NextResponse.json(
-        { success: false, error: error.message },
+        { success: false, error: deleteError.message },
         { status: 500 }
       );
     }
 
-    return NextResponse.json({ success: true, processedCount: deduped.length });
+    // 3. Insert fresh — restore notified=true for already-alerted legs
+    const toInsert = deduped.map((r) => ({
+      ...r,
+      notified: notifiedSet.has(`${r.file_ref}|${r.scheduled_time}`),
+    }));
+
+    const { error: insertError } = await supabaseAdmin
+      .from("flights")
+      .insert(toInsert);
+
+    if (insertError) {
+      console.error("[upload] Insert error:", insertError);
+      return NextResponse.json(
+        { success: false, error: insertError.message },
+        { status: 500 }
+      );
+    }
+
+    return NextResponse.json({ success: true, processedCount: toInsert.length });
   } catch (err) {
     console.error("[upload] Unhandled error:", err);
     return NextResponse.json(
