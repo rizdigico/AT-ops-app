@@ -15,7 +15,8 @@ export function FlightCard({
   status,
   type,
   notified,
-}: Flight) {
+  isPast = false,
+}: Flight & { isPast?: boolean }) {
   const isDelayed = status === "Delayed";
   const isCancelled = status === "Cancelled";
 
@@ -35,7 +36,7 @@ export function FlightCard({
 
   return (
     <div
-      className={`glass-card p-4 rounded-xl mb-3 border border-card-border border-l-4 ${borderLeft} hover:bg-white/5 transition-colors`}
+      className={`glass-card p-4 rounded-xl mb-3 border border-card-border border-l-4 ${borderLeft} hover:bg-white/5 transition-colors ${isPast ? "opacity-40" : ""}`}
     >
       {/* Header */}
       <div className="flex justify-between items-start mb-3">

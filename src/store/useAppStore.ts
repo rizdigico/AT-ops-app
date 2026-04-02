@@ -13,6 +13,7 @@ export interface Flight {
   agent: string;
   terminal: string;
   type: TransferType;
+  scheduledISO: string;     // raw UTC ISO from DB — used for date comparisons
   scheduled_time: string;   // formatted HH:MM SGT
   updated_time?: string;    // formatted HH:MM SGT, present when delayed
   driver_info: string;
@@ -77,6 +78,7 @@ export function mapDbFlight(row: DbFlight): Flight {
     agent: row.agent ?? "",
     terminal: row.terminal ?? "TBC",
     type: row.type,
+    scheduledISO: row.scheduled_time,
     scheduled_time: fmtTime(row.scheduled_time),
     updated_time: row.updated_time ? fmtTime(row.updated_time) : undefined,
     driver_info: row.driver_info ?? "",
@@ -109,10 +111,10 @@ export const useAppStore = create<AppState>((set) => ({
       const mapped = mapDbFlight(row);
       switch (event) {
         case "INSERT":
-          // Keep sorted by scheduled_time
+          // Keep sorted by raw ISO so multi-day ordering is correct
           return {
             flights: [...state.flights, mapped].sort((a, b) =>
-              a.scheduled_time.localeCompare(b.scheduled_time)
+              a.scheduledISO.localeCompare(b.scheduledISO)
             ),
           };
         case "UPDATE":
