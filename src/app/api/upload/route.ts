@@ -127,10 +127,16 @@ export async function POST(req: NextRequest) {
 
       const scheduled_time = parseAndEnforceSGTime(dateVal, timeVal);
 
-      // Derive date from the Excel date cell directly.
-      // Do NOT slice scheduled_time (UTC ISO): times before 08:00 SGT store as
-      // the previous UTC day, giving a wrong date for early-morning transfers.
-      const date = excelDate(dateVal) || scheduled_time.slice(0, 10);
+      // Derive the SGT calendar date for this transfer.
+      // Primary: read directly from the Excel date cell (UTC-safe).
+      // Fallback: convert scheduled_time (UTC) back to SGT and take that date.
+      //   Do NOT use scheduled_time.slice(0,10) — that is the UTC date, and
+      //   any flight before 08:00 SGT is stored as the previous UTC day.
+      const date =
+        excelDate(dateVal) ||
+        new Date(scheduled_time).toLocaleDateString("en-CA", {
+          timeZone: "Asia/Singapore",
+        });
 
       records.push({
         file_ref,

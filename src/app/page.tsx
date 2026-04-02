@@ -28,12 +28,17 @@ export default function Home() {
 
   const fetchFlights = useCallback(async () => {
     setLoading(true);
-    const today = new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Singapore" });
+    // Build today's SGT window in UTC so the query is timezone-proof.
+    // e.g. Apr 1 SGT = Mar 31 16:00 UTC → Apr 1 15:59:59 UTC
+    const todaySGT = new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Singapore" });
+    const dayStartUTC = new Date(todaySGT + "T00:00:00+08:00").toISOString();
+    const dayEndUTC   = new Date(todaySGT + "T23:59:59+08:00").toISOString();
 
     const { data, error } = await supabase
       .from("flights")
       .select("*")
-      .eq("date", today)
+      .gte("scheduled_time", dayStartUTC)
+      .lte("scheduled_time", dayEndUTC)
       .order("scheduled_time", { ascending: true });
 
     if (error) {
