@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { addHours, addMinutes, differenceInMinutes, format } from "date-fns";
 import { toZonedTime } from "date-fns-tz";
+import webpush from "web-push";
 import { supabaseAdmin } from "@/utils/supabase/admin";
 import { fetchFlightStatus } from "@/lib/aviation-utils";
 import { sendWhatsAppAlert } from "@/lib/whatsapp-utils";
@@ -9,6 +10,49 @@ import { sendWhatsAppAlert } from "@/lib/whatsapp-utils";
 export const dynamic = "force-dynamic";
 
 const TZ = "Asia/Singapore";
+
+// Configure VAPID for push notifications (no-op if env vars missing)
+if (
+  process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY &&
+  process.env.VAPID_PRIVATE_KEY &&
+  process.env.VAPID_SUBJECT
+) {
+  webpush.setVapidDetails(
+    process.env.VAPID_SUBJECT,
+    process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY,
+    process.env.VAPID_PRIVATE_KEY
+  );
+}
+
+async function sendPushNotifications(message: string, tag: string) {
+  try {
+    const { data: subs } = await supabaseAdmin
+      .from("push_subscriptions")
+      .select("endpoint, p256dh, auth");
+
+    if (!subs?.length) return;
+
+    const payload = JSON.stringify({ title: "AT Dispatch Alert", body: message, tag });
+    await Promise.allSettled(
+      subs.map((sub) =>
+        webpush.sendNotification(
+          { endpoint: sub.endpoint, keys: { p256dh: sub.p256dh, auth: sub.auth } },
+          payload
+        ).catch((err) => {
+          // Remove expired/invalid subscriptions
+          if (err.statusCode === 410 || err.statusCode === 404) {
+            return supabaseAdmin
+              .from("push_subscriptions")
+              .delete()
+              .eq("endpoint", sub.endpoint);
+          }
+        })
+      )
+    );
+  } catch (err) {
+    console.error("[push] Error sending push notifications:", err);
+  }
+}
 
 export async function GET() {
   try {
@@ -38,11 +82,24 @@ export async function GET() {
 
       if (!flight.flight_number) continue;
 
+      // Log the API call for quota tracking
+      await supabaseAdmin
+        .from("api_calls")
+        .insert({ flight_number: flight.flight_number });
+
       const { flightStatus, estimatedArrival } = await fetchFlightStatus(flight.flight_number);
 
       if (!flightStatus) continue;
 
       const isCancelled = flightStatus === "cancelled";
+
+      // Persist cancelled status to DB so it shows in the Cancelled tab
+      if (isCancelled) {
+        await supabaseAdmin
+          .from("flights")
+          .update({ status_override: "Cancelled" })
+          .eq("id", flight.id);
+      }
 
       const baseArrivalIso: string = flight.updated_time ?? flight.scheduled_time;
       let bestArrival = new Date(baseArrivalIso);
@@ -75,6 +132,7 @@ export async function GET() {
         `Driver: ${flight.driver_info ?? "TBA"}. Terminal: ${flight.terminal}.`;
 
       await sendWhatsAppAlert(message);
+      await sendPushNotifications(message, `arrival-${flight.id}`);
       await supabaseAdmin
         .from("flights")
         .update({ notified: true })
@@ -115,6 +173,7 @@ export async function GET() {
         `Driver: ${flight.driver_info ?? "TBA"}. Terminal: ${flight.terminal}.`;
 
       await sendWhatsAppAlert(message);
+      await sendPushNotifications(message, `departure-${flight.id}`);
       await supabaseAdmin
         .from("flights")
         .update({ notified: true })

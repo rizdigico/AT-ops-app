@@ -19,6 +19,9 @@ export interface Flight {
   driver_info: string;
   notified: boolean;
   status: TransferStatus;
+  completed: boolean;
+  notes: string | null;
+  status_override: "Delayed" | "Cancelled" | null;
 }
 
 // Extended type used by 3D visualisation components
@@ -42,6 +45,9 @@ export interface DbFlight {
   updated_time: string | null;
   driver_info: string | null;
   notified: boolean;
+  completed: boolean;
+  notes: string | null;
+  status_override: "Delayed" | "Cancelled" | null;
   created_at: string;
 }
 
@@ -58,11 +64,15 @@ function fmtTime(iso: string): string {
 }
 
 // Derive status from DB fields:
+// - status_override takes highest precedence
 // - updated_time set + ≥15 min diff → Delayed
-// - We keep the door open for Cancelled via the Cron job later
 export function mapDbFlight(row: DbFlight): Flight {
   let status: TransferStatus = "On Time";
-  if (row.updated_time) {
+  if (row.status_override === "Cancelled") {
+    status = "Cancelled";
+  } else if (row.status_override === "Delayed") {
+    status = "Delayed";
+  } else if (row.updated_time) {
     const diffMs =
       new Date(row.updated_time).getTime() -
       new Date(row.scheduled_time).getTime();
@@ -84,6 +94,9 @@ export function mapDbFlight(row: DbFlight): Flight {
     driver_info: row.driver_info ?? "",
     notified: row.notified,
     status,
+    completed: row.completed ?? false,
+    notes: row.notes ?? null,
+    status_override: row.status_override ?? null,
   };
 }
 

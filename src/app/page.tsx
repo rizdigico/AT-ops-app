@@ -5,11 +5,14 @@ import { TopNav } from "@/components/TopNav";
 import { StatsRow } from "@/components/StatsRow";
 import { FlightCard } from "@/components/FlightCard";
 import { ScheduleUploader } from "@/components/ScheduleUploader";
+import { WeeklyStrip } from "@/components/WeeklyStrip";
+import { ApiUsageCounter } from "@/components/ApiUsageCounter";
 import { useAppStore, mapDbFlight, DbFlight, Flight } from "@/store/useAppStore";
 import { createClient } from "@/utils/supabase/client";
 import {
   Radio, Loader2, Trash2, ArrowLeft,
   CalendarDays, Clock, History, AlertTriangle, XCircle,
+  Search, X, Download,
 } from "lucide-react";
 
 const supabase = createClient();
@@ -59,9 +62,38 @@ function EmptyTab({ onUpload }: { onUpload: () => void }) {
   );
 }
 
+function exportCsv(flights: Flight[], label: string) {
+  const header = "Date,Type,Pax Name,Pax Count,Flight,Agent,Terminal,Time,Status,Driver,Completed,Notes";
+  const rows = flights.map((f) =>
+    [
+      f.date,
+      f.type,
+      `"${f.pax_name.replace(/"/g, '""')}"`,
+      f.pax_count,
+      f.flight_number,
+      f.agent,
+      f.terminal,
+      f.scheduled_time,
+      f.status,
+      `"${(f.driver_info ?? "").replace(/"/g, '""')}"`,
+      f.completed ? "Yes" : "No",
+      `"${(f.notes ?? "").replace(/"/g, '""')}"`,
+    ].join(",")
+  );
+  const csv = [header, ...rows].join("\n");
+  const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `AT_Ops_${label}_${new Date().toISOString().slice(0, 10)}.csv`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
 export default function Home() {
   const [showUpload, setShowUpload] = useState(false);
   const [activeTab, setActiveTab] = useState<TabId>("today");
+  const [searchQuery, setSearchQuery] = useState("");
 
   const [clearStage, setClearStage] = useState<"idle" | "confirm" | "holding" | "clearing">("idle");
   const [holdProgress, setHoldProgress] = useState(0);
@@ -96,6 +128,20 @@ export default function Home() {
     return () => { supabase.removeChannel(channel); };
   }, [fetchFlights, applyRealtimeEvent]);
 
+  // ── Search filter ─────────────────────────────────────────────────────────
+
+  const filteredFlights = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
+    if (!q) return flights;
+    return flights.filter(
+      (f) =>
+        f.pax_name.toLowerCase().includes(q) ||
+        f.flight_number.toLowerCase().includes(q) ||
+        f.driver_info.toLowerCase().includes(q) ||
+        f.agent.toLowerCase().includes(q)
+    );
+  }, [flights, searchQuery]);
+
   // ── Partition flights into tab buckets ────────────────────────────────────
 
   const buckets = useMemo(() => {
@@ -108,7 +154,7 @@ export default function Home() {
     const delayed: Flight[]   = [];
     const cancelled: Flight[] = [];
 
-    for (const f of flights) {
+    for (const f of filteredFlights) {
       if (f.status === "Delayed")   delayed.push(f);
       if (f.status === "Cancelled") cancelled.push(f);
 
@@ -117,7 +163,6 @@ export default function Home() {
       else                     upcoming.push(f);
     }
 
-    // Group upcoming by date
     const upcomingByDate = new Map<string, Flight[]>();
     for (const f of upcoming) {
       const arr = upcomingByDate.get(f.date) ?? [];
@@ -125,7 +170,6 @@ export default function Home() {
       upcomingByDate.set(f.date, arr);
     }
 
-    // Group past by date (newest first)
     const pastByDate = new Map<string, Flight[]>();
     for (const f of past) {
       const arr = pastByDate.get(f.date) ?? [];
@@ -133,7 +177,6 @@ export default function Home() {
       pastByDate.set(f.date, arr);
     }
 
-    // Split today into upcoming / completed
     const todayUpcoming  = today.filter((f) => new Date(f.scheduledISO).getTime() > nowMs);
     const todayCompleted = today.filter((f) => new Date(f.scheduledISO).getTime() <= nowMs);
 
@@ -151,7 +194,7 @@ export default function Home() {
       delayed,
       cancelled,
     };
-  }, [flights]);
+  }, [filteredFlights]);
 
   const counts: Record<TabId, number> = {
     today:     buckets.today.length,
@@ -160,6 +203,17 @@ export default function Home() {
     delayed:   buckets.delayed.length,
     cancelled: buckets.cancelled.length,
   };
+
+  // Active tab's full flat list (for export)
+  const activeFlights = useMemo(() => {
+    switch (activeTab) {
+      case "today":     return buckets.today;
+      case "upcoming":  return buckets.upcomingGroups.flatMap((g) => g.flights);
+      case "past":      return buckets.pastGroups.flatMap((g) => g.flights);
+      case "delayed":   return buckets.delayed;
+      case "cancelled": return buckets.cancelled;
+    }
+  }, [activeTab, buckets]);
 
   // ── Clear logic ───────────────────────────────────────────────────────────
 
@@ -222,6 +276,52 @@ export default function Home() {
       <main className="flex-1 w-full max-w-5xl mx-auto px-4 py-6 flex flex-col">
 
         <StatsRow />
+
+        {/* ── Weekly overview strip ── */}
+        <WeeklyStrip
+          flights={flights}
+          onDayClick={(date) => {
+            const sgt = new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Singapore" });
+            if (date === sgt) setActiveTab("today");
+            else if (date > sgt) setActiveTab("upcoming");
+            else setActiveTab("past");
+          }}
+        />
+
+        {/* ── Search bar + Export ── */}
+        {flights.length > 0 && (
+          <div className="flex items-center gap-2 mb-4">
+            <div className="relative flex-1">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-zinc-600" />
+              <input
+                type="text"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                placeholder="Search pax, flight, driver…"
+                className="w-full bg-zinc-900/60 border border-zinc-800 rounded-lg pl-9 pr-8 py-2 text-xs font-mono text-zinc-300 placeholder-zinc-600 focus:outline-none focus:border-zinc-600 transition-colors"
+              />
+              {searchQuery && (
+                <button
+                  onClick={() => setSearchQuery("")}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-zinc-600 hover:text-zinc-400"
+                >
+                  <X className="w-3 h-3" />
+                </button>
+              )}
+            </div>
+            {activeFlights.length > 0 && (
+              <button
+                onClick={() => exportCsv(activeFlights, activeTab)}
+                title="Export current view as CSV"
+                className="flex items-center gap-1.5 px-3 py-2 rounded-lg border border-zinc-800 bg-zinc-900/60 text-xs font-mono text-zinc-500 hover:text-zinc-300 hover:border-zinc-600 transition-colors"
+              >
+                <Download className="w-3.5 h-3.5" />
+                <span className="hidden sm:inline">Export</span>
+              </button>
+            )}
+            <ApiUsageCounter />
+          </div>
+        )}
 
         {/* ── Tab bar ── */}
         <div className="flex gap-1.5 flex-wrap mb-6 p-1 rounded-xl bg-zinc-900/60 border border-zinc-800">

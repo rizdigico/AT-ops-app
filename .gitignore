@@ -42,3 +42,6 @@ next-env.d.ts
 
 # PRD & Local Reference Docs (for AI coding models, not deployed)
 /docs/PRD/
+
+.vercel
+.env*.local
