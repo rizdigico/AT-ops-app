@@ -28,8 +28,7 @@ export function FlightCard({
   notes: initialNotes,
   status_override: initialStatusOverride,
   isPast = false,
-  onStatusChanged,
-}: Flight & { isPast?: boolean; onStatusChanged?: (id: string, override: StatusOverride) => void }) {
+}: Flight & { isPast?: boolean }) {
   const isDelayed = status === "Delayed";
   const isCancelled = status === "Cancelled";
 
@@ -98,7 +97,6 @@ export function FlightCard({
     setStatusOverride(override);
     setShowStatusMenu(false);
     updateFlightStatus(id, override);
-    onStatusChanged?.(id, override);
     fetch(`/api/flights/${id}/status`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },

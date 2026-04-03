@@ -100,13 +100,17 @@ export function mapDbFlight(row: DbFlight): Flight {
   };
 }
 
+export type TabId = "today" | "upcoming" | "past" | "delayed" | "cancelled";
+
 interface AppState {
   flights: Flight[];
   isLoading: boolean;
   isDeployed: boolean;
+  activeTab: TabId;
   setFlights: (flights: Flight[]) => void;
   setLoading: (v: boolean) => void;
   setIsDeployed: (v: boolean) => void;
+  setActiveTab: (tab: TabId) => void;
   applyRealtimeEvent: (event: "INSERT" | "UPDATE" | "DELETE", row: DbFlight) => void;
   updateFlightStatus: (id: string, override: "Delayed" | "Cancelled" | null) => void;
   updateFlightNotes: (id: string, notes: string | null) => void;
@@ -116,25 +120,45 @@ export const useAppStore = create<AppState>((set) => ({
   flights: [],
   isLoading: true,
   isDeployed: false,
+  activeTab: "today",
 
   setFlights: (flights) => set({ flights }),
   setLoading: (v) => set({ isLoading: v }),
   setIsDeployed: (v) => set({ isDeployed: v }),
+  setActiveTab: (tab) => set({ activeTab: tab }),
 
   updateFlightStatus: (id, override) =>
-    set((state) => ({
-      flights: state.flights.map((f) => {
+    set((state) => {
+      const flights = state.flights.map((f) => {
         if (f.id !== id) return f;
         let newStatus: TransferStatus;
         if (override === "Cancelled") newStatus = "Cancelled";
         else if (override === "Delayed") newStatus = "Delayed";
         else {
-          // Reset: restore base status — delayed if cron set an updated_time, else On Time
           newStatus = f.updated_time ? "Delayed" : "On Time";
         }
         return { ...f, status_override: override, status: newStatus };
-      }),
-    })),
+      });
+
+      // Determine which tab the flight now belongs to
+      let activeTab: TabId = state.activeTab;
+      if (override === "Delayed") {
+        activeTab = "delayed";
+      } else if (override === "Cancelled") {
+        activeTab = "cancelled";
+      } else {
+        // Reset — navigate to the date-based tab
+        const flight = state.flights.find((f) => f.id === id);
+        if (flight) {
+          const sgt = new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Singapore" });
+          if (flight.date < sgt) activeTab = "past";
+          else if (flight.date === sgt) activeTab = "today";
+          else activeTab = "upcoming";
+        }
+      }
+
+      return { flights, activeTab };
+    }),
 
   updateFlightNotes: (id, notes) =>
     set((state) => ({
