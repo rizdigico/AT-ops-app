@@ -35,9 +35,14 @@ function formatDayLabel(dateStr: string): string {
   });
 }
 
-function DayGroup({ date, flights, isPast }: { date: string; flights: Flight[]; isPast?: boolean }) {
+function DayGroup({
+  date, flights, isPast, onStatusChanged,
+}: {
+  date: string; flights: Flight[]; isPast?: boolean;
+  onStatusChanged?: (id: string, override: "Delayed" | "Cancelled" | null) => void;
+}) {
   return (
-    <div className="mb-6">
+    <div id={`date-group-${date}`} className="mb-6">
       <div className="flex items-center gap-2 mb-3">
         <span className="text-[10px] uppercase tracking-widest text-zinc-500 font-mono font-semibold">
           {formatDayLabel(date)}
@@ -45,7 +50,7 @@ function DayGroup({ date, flights, isPast }: { date: string; flights: Flight[]; 
         <span className="text-[10px] text-zinc-700 font-mono">· {flights.length}</span>
         <div className="flex-1 h-px bg-zinc-800 ml-1" />
       </div>
-      {flights.map((f) => <FlightCard key={f.id} {...f} isPast={isPast} />)}
+      {flights.map((f) => <FlightCard key={f.id} {...f} isPast={isPast} onStatusChanged={onStatusChanged} />)}
     </div>
   );
 }
@@ -94,6 +99,7 @@ export default function Home() {
   const [showUpload, setShowUpload] = useState(false);
   const [activeTab, setActiveTab] = useState<TabId>("today");
   const [searchQuery, setSearchQuery] = useState("");
+  const [selectedDate, setSelectedDate] = useState<string | null>(null);
 
   const [clearStage, setClearStage] = useState<"idle" | "confirm" | "holding" | "clearing">("idle");
   const [holdProgress, setHoldProgress] = useState(0);
@@ -104,6 +110,38 @@ export default function Home() {
   const setFlights = useAppStore((s) => s.setFlights);
   const setLoading = useAppStore((s) => s.setLoading);
   const applyRealtimeEvent = useAppStore((s) => s.applyRealtimeEvent);
+
+  // Scroll to a specific date group after the tab has rendered
+  useEffect(() => {
+    if (!selectedDate) return;
+    let raf1: number, raf2: number;
+    raf1 = requestAnimationFrame(() => {
+      raf2 = requestAnimationFrame(() => {
+        const el = document.getElementById(`date-group-${selectedDate}`);
+        if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
+        setSelectedDate(null);
+      });
+    });
+    return () => { cancelAnimationFrame(raf1); cancelAnimationFrame(raf2); };
+  }, [selectedDate, activeTab]);
+
+  // Auto-switch tab when a flight's status changes
+  const handleStatusChanged = useCallback((id: string, override: "Delayed" | "Cancelled" | null) => {
+    if (override === "Delayed") {
+      setActiveTab("delayed");
+    } else if (override === "Cancelled") {
+      setActiveTab("cancelled");
+    } else {
+      // Reset — navigate to the date-based tab this flight belongs to
+      const flight = flights.find((f) => f.id === id);
+      if (flight) {
+        const sgt = new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Singapore" });
+        if (flight.date < sgt) setActiveTab("past");
+        else if (flight.date === sgt) setActiveTab("today");
+        else setActiveTab("upcoming");
+      }
+    }
+  }, [flights]);
 
   const fetchFlights = useCallback(async () => {
     setLoading(true);
@@ -155,8 +193,8 @@ export default function Home() {
     const cancelled: Flight[] = [];
 
     for (const f of filteredFlights) {
-      if (f.status === "Delayed")   delayed.push(f);
-      if (f.status === "Cancelled") cancelled.push(f);
+      if (f.status === "Delayed")   { delayed.push(f);   continue; }
+      if (f.status === "Cancelled") { cancelled.push(f); continue; }
 
       if (f.date < sgt)       past.push(f);
       else if (f.date === sgt) today.push(f);
@@ -285,6 +323,7 @@ export default function Home() {
             if (date === sgt) setActiveTab("today");
             else if (date > sgt) setActiveTab("upcoming");
             else setActiveTab("past");
+            setSelectedDate(date);
           }}
         />
 
@@ -372,6 +411,7 @@ export default function Home() {
                     <DayGroup
                       date={buckets.sgt}
                       flights={buckets.todayUpcoming}
+                      onStatusChanged={handleStatusChanged}
                     />
                   )}
                   {buckets.todayCompleted.length > 0 && (
@@ -383,7 +423,7 @@ export default function Home() {
                         <span className="text-[10px] text-zinc-700 font-mono">· {buckets.todayCompleted.length}</span>
                         <div className="flex-1 h-px bg-zinc-800 ml-1" />
                       </div>
-                      {buckets.todayCompleted.map((f) => <FlightCard key={f.id} {...f} isPast />)}
+                      {buckets.todayCompleted.map((f) => <FlightCard key={f.id} {...f} isPast onStatusChanged={handleStatusChanged} />)}
                     </div>
                   )}
                 </>
@@ -396,7 +436,7 @@ export default function Home() {
                 <EmptyTab onUpload={() => setShowUpload(true)} />
               ) : (
                 buckets.upcomingGroups.map(({ date, flights }) => (
-                  <DayGroup key={date} date={date} flights={flights} />
+                  <DayGroup key={date} date={date} flights={flights} onStatusChanged={handleStatusChanged} />
                 ))
               )
             )}
@@ -407,7 +447,7 @@ export default function Home() {
                 <EmptyTab onUpload={() => setShowUpload(true)} />
               ) : (
                 buckets.pastGroups.map(({ date, flights }) => (
-                  <DayGroup key={date} date={date} flights={flights} isPast />
+                  <DayGroup key={date} date={date} flights={flights} isPast onStatusChanged={handleStatusChanged} />
                 ))
               )
             )}
@@ -420,7 +460,7 @@ export default function Home() {
                   <p className="text-sm">No delayed transfers.</p>
                 </div>
               ) : (
-                buckets.delayed.map((f) => <FlightCard key={f.id} {...f} />)
+                buckets.delayed.map((f) => <FlightCard key={f.id} {...f} onStatusChanged={handleStatusChanged} />)
               )
             )}
 
@@ -432,7 +472,7 @@ export default function Home() {
                   <p className="text-sm">No cancelled transfers.</p>
                 </div>
               ) : (
-                buckets.cancelled.map((f) => <FlightCard key={f.id} {...f} />)
+                buckets.cancelled.map((f) => <FlightCard key={f.id} {...f} onStatusChanged={handleStatusChanged} />)
               )
             )}
 

@@ -1,11 +1,12 @@
 "use client";
 
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect } from "react";
 import {
   PlaneLanding, PlaneTakeoff, Users, Car, MapPin, MessageCircle,
   CheckCircle2, Circle, Copy, Check, ChevronDown, ChevronUp,
   AlertTriangle, XCircle, RotateCcw, FileText,
 } from "lucide-react";
+import { useAppStore } from "@/store/useAppStore";
 import type { Flight } from "@/store/useAppStore";
 
 type StatusOverride = "Delayed" | "Cancelled" | null;
@@ -27,7 +28,8 @@ export function FlightCard({
   notes: initialNotes,
   status_override: initialStatusOverride,
   isPast = false,
-}: Flight & { isPast?: boolean }) {
+  onStatusChanged,
+}: Flight & { isPast?: boolean; onStatusChanged?: (id: string, override: StatusOverride) => void }) {
   const isDelayed = status === "Delayed";
   const isCancelled = status === "Cancelled";
 
@@ -39,6 +41,20 @@ export function FlightCard({
   const [showNotes, setShowNotes] = useState(!!initialNotes);
   const [copied, setCopied] = useState(false);
   const notesRef = useRef<HTMLTextAreaElement>(null);
+  const skipBlurRef = useRef(false);
+
+  const updateFlightStatus = useAppStore((s) => s.updateFlightStatus);
+  const updateFlightNotes  = useAppStore((s) => s.updateFlightNotes);
+
+  // Sync local state when store/realtime updates props
+  useEffect(() => {
+    setStatusOverride(initialStatusOverride);
+  }, [initialStatusOverride]);
+
+  useEffect(() => {
+    setNotes(initialNotes ?? "");
+    setShowNotes(!!initialNotes);
+  }, [initialNotes]);
 
   // Derive effective status after override
   const effectiveStatus = statusOverride ?? status;
@@ -78,22 +94,32 @@ export function FlightCard({
   }
 
   function applyStatusOverride(override: StatusOverride) {
+    const prev = statusOverride;
     setStatusOverride(override);
     setShowStatusMenu(false);
+    updateFlightStatus(id, override);
+    onStatusChanged?.(id, override);
     fetch(`/api/flights/${id}/status`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ status_override: override }),
-    }).catch(() => setStatusOverride(statusOverride));
+    }).catch(() => {
+      setStatusOverride(prev);
+      updateFlightStatus(id, prev);
+    });
   }
 
-  function saveNotes() {
-    const value = notes.trim();
+  function saveNotes(value?: string) {
+    const toSave = (value !== undefined ? value : notes).trim() || null;
+    updateFlightNotes(id, toSave);
     fetch(`/api/flights/${id}/notes`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ notes: value || null }),
-    }).catch(() => {});
+      body: JSON.stringify({ notes: toSave }),
+    }).catch(() => {
+      // Revert store on failure
+      updateFlightNotes(id, initialNotes);
+    });
   }
 
   return (
@@ -249,13 +275,14 @@ export function FlightCard({
               ref={notesRef}
               value={notes}
               onChange={(e) => setNotes(e.target.value)}
-              onBlur={saveNotes}
+              onBlur={(e) => { if (!skipBlurRef.current) saveNotes(e.target.value); }}
               placeholder="Add dispatcher notes…"
               rows={2}
               className="w-full bg-zinc-900/60 border border-zinc-700 rounded-lg px-3 py-2 text-xs font-mono text-zinc-300 placeholder-zinc-600 resize-none focus:outline-none focus:border-zinc-500 transition-colors"
             />
             <button
-              onClick={() => { setShowNotes(false); setNotes(""); saveNotes(); }}
+              onMouseDown={() => { skipBlurRef.current = true; }}
+              onClick={() => { skipBlurRef.current = false; setShowNotes(false); setNotes(""); saveNotes(""); }}
               className="self-end text-[10px] text-zinc-700 hover:text-zinc-500 font-mono uppercase tracking-widest transition-colors"
             >
               Remove note

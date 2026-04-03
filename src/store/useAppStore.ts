@@ -108,6 +108,8 @@ interface AppState {
   setLoading: (v: boolean) => void;
   setIsDeployed: (v: boolean) => void;
   applyRealtimeEvent: (event: "INSERT" | "UPDATE" | "DELETE", row: DbFlight) => void;
+  updateFlightStatus: (id: string, override: "Delayed" | "Cancelled" | null) => void;
+  updateFlightNotes: (id: string, notes: string | null) => void;
 }
 
 export const useAppStore = create<AppState>((set) => ({
@@ -118,6 +120,28 @@ export const useAppStore = create<AppState>((set) => ({
   setFlights: (flights) => set({ flights }),
   setLoading: (v) => set({ isLoading: v }),
   setIsDeployed: (v) => set({ isDeployed: v }),
+
+  updateFlightStatus: (id, override) =>
+    set((state) => ({
+      flights: state.flights.map((f) => {
+        if (f.id !== id) return f;
+        let newStatus: TransferStatus;
+        if (override === "Cancelled") newStatus = "Cancelled";
+        else if (override === "Delayed") newStatus = "Delayed";
+        else {
+          // Reset: restore base status — delayed if cron set an updated_time, else On Time
+          newStatus = f.updated_time ? "Delayed" : "On Time";
+        }
+        return { ...f, status_override: override, status: newStatus };
+      }),
+    })),
+
+  updateFlightNotes: (id, notes) =>
+    set((state) => ({
+      flights: state.flights.map((f) =>
+        f.id === id ? { ...f, notes } : f
+      ),
+    })),
 
   applyRealtimeEvent: (event, row) =>
     set((state) => {
