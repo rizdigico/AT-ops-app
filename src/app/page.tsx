@@ -267,7 +267,7 @@ export default function Home() {
   if (showUpload) {
     return (
       <div className="min-h-screen bg-background text-foreground flex flex-col">
-        <TopNav onUploadClick={() => setShowUpload(true)} />
+        <TopNav onUploadClick={() => setShowUpload(true)} onAfterSync={fetchFlights} />
         <main className="flex-1 w-full max-w-5xl mx-auto px-4 py-6">
           <button
             onClick={() => setShowUpload(false)}
