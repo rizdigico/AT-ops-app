@@ -234,9 +234,10 @@ export async function POST(req: NextRequest) {
       .from("flights")
       .insert(toInsert);
 
-    // Graceful fallback: if insert fails due to missing optional columns (e.g. before
-    // the 0005 migration is applied), strip the new fields and retry.
-    if (insertError?.code === "42703") {
+    // Graceful fallback: if insert fails because optional columns don't exist yet
+    // (migration 0005 not yet applied), strip them and retry.
+    // Supabase returns PGRST204 for "column not found in schema cache".
+    if (insertError?.code === "PGRST204" || insertError?.message?.includes("column")) {
       console.warn("[upload] New columns not yet migrated — retrying without optional fields");
       const coreOnly = toInsert.map(({ services, from_location, to_location, supplier, ...core }) => core);
       const retry = await supabaseAdmin.from("flights").insert(coreOnly);

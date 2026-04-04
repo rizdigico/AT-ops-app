@@ -335,28 +335,47 @@ def main():
     mode_label = "FULL (with supplier/from/to/services)" if full_mode else "BASE (driver + all core fields)"
     print(f"Mode: {mode_label}\n")
 
+    # ── Collect ALL records from ALL files first ─────────────────────────────
+    # This is critical: if the same file_ref appears in multiple weekly files
+    # (e.g. a booking that spans two weeks), we must process them together.
+    # Processing files one-by-one with delete-then-insert would lose records
+    # from the first file when the second file's delete runs.
+    all_records: list[dict] = []
+
     for path in paths:
         print(f"\n{'='*60}")
-        print(f"Processing: {path}")
+        print(f"Parsing: {path}")
         records = parse_sheet(path, full_mode=full_mode)
-        if not records:
+        if records:
+            all_records.extend(records)
+            print(f"  Parsed {len(records)} rows from this file.")
+        else:
             print("  No valid records.")
-            continue
 
-        deduped = deduplicate(records)
-        print(f"\n  Records after dedup: {len(deduped)}")
+    if not all_records:
+        print("\nNo records found across any file. Aborting.")
+        return
 
-        file_refs = list({r["file_ref"] for r in deduped})
-        notified_set = snapshot_notified(file_refs)
-        print(f"  Previously notified: {len(notified_set)}")
+    # ── Single batch: deduplicate across ALL files ───────────────────────────
+    # When the same (file_ref, scheduled_time) appears in both files, keep the
+    # LATER file's version (it's more up to date).
+    deduped = deduplicate(all_records)
+    print(f"\n{'='*60}")
+    print(f"Total records across all files (after dedup): {len(deduped)}")
 
-        for r in deduped:
-            if f"{r['file_ref']}|{r['scheduled_time']}" in notified_set:
-                r["notified"] = True
+    # ── One delete + one insert for everything ───────────────────────────────
+    file_refs = list({r["file_ref"] for r in deduped})
+    print(f"Unique file refs: {len(file_refs)}")
 
-        delete_existing(file_refs)
-        insert_records(deduped)
+    notified_set = snapshot_notified(file_refs)
+    print(f"Previously notified pairs: {len(notified_set)}")
 
+    for r in deduped:
+        if f"{r['file_ref']}|{r['scheduled_time']}" in notified_set:
+            r["notified"] = True
+
+    delete_existing(file_refs)
+    insert_records(deduped)
     print("\nDone!")
 
 

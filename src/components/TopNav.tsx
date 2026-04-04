@@ -91,7 +91,7 @@ export function TopNav({ onUploadClick, onAfterSync }: TopNavProps) {
   // Menu drawer state
   const [menuOpen, setMenuOpen] = useState(false);
   const [syncing, setSyncing] = useState(false);
-  const [syncResult, setSyncResult] = useState<{ processed: number; notified: number } | null>(null);
+  const [syncResult, setSyncResult] = useState<{ sent: number; skipped: number } | null>(null);
   const [syncError, setSyncError] = useState<string | null>(null);
   const [lastSyncTime, setLastSyncTime] = useState<string | null>(null);
   const [apiUsage, setApiUsage] = useState<{ used: number; limit: number } | null>(null);
@@ -161,20 +161,20 @@ export function TopNav({ onUploadClick, onAfterSync }: TopNavProps) {
     setPushLoading(false);
   }, [pushEnabled, pushLoading]);
 
-  const handleForceSync = useCallback(async () => {
+  const handleSendNow = useCallback(async () => {
     if (syncing) return;
     setSyncing(true);
     setSyncResult(null);
     setSyncError(null);
     try {
-      const res = await fetch("/api/cron/sync-flights");
-      const data = await res.json() as { success: boolean; processed?: number; notified?: number; error?: string };
+      const res = await fetch("/api/notify/send-now", { method: "POST" });
+      const data = await res.json() as { success: boolean; sent?: number; skipped?: number; message?: string; error?: string };
       if (data.success) {
-        setSyncResult({ processed: data.processed ?? 0, notified: data.notified ?? 0 });
+        setSyncResult({ sent: data.sent ?? 0, skipped: data.skipped ?? 0 });
         setLastSyncTime(new Date().toLocaleTimeString("en-SG", { timeZone: "Asia/Singapore", hour: "2-digit", minute: "2-digit", hour12: false }));
         onAfterSync?.();
       } else {
-        setSyncError(data.error ?? "Sync failed");
+        setSyncError(data.error ?? "Failed to send notifications");
       }
     } catch {
       setSyncError("Network error — check connection");
@@ -310,31 +310,32 @@ export function TopNav({ onUploadClick, onAfterSync }: TopNavProps) {
                 </div>
               </section>
 
-              {/* ── Section: Force Sync ─────────────────────────────── */}
+              {/* ── Section: WhatsApp Notifications ─────────────────── */}
               <section>
-                <p className="text-[10px] uppercase tracking-widest text-zinc-500 font-mono font-semibold mb-3">Flight Sync</p>
+                <p className="text-[10px] uppercase tracking-widest text-zinc-500 font-mono font-semibold mb-3">WhatsApp Alerts</p>
                 <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-4 space-y-3">
                   <p className="text-xs text-zinc-400 leading-relaxed">
-                    Manually poll Aviationstack, detect delays & cancellations, and fire any due alerts — without waiting for the next 15-min cron run.
+                    Instantly blast WhatsApp notifications for all upcoming unnotified transfers — driver, terminal, time, and pax details.
                   </p>
                   <button
-                    onClick={handleForceSync}
+                    onClick={handleSendNow}
                     disabled={syncing}
                     className={`w-full flex items-center justify-center gap-2 px-3 py-2.5 rounded-lg text-xs font-mono font-semibold uppercase tracking-wider transition-all
                       ${syncing
                         ? "bg-zinc-800 text-zinc-500 cursor-wait"
-                        : "bg-white text-black hover:bg-zinc-200"
+                        : "bg-[#25D366] text-black hover:bg-[#1ebe5d]"
                       }`}
                   >
                     <RefreshCw className={`w-3.5 h-3.5 ${syncing ? "animate-spin" : ""}`} />
-                    {syncing ? "Syncing…" : "Sync Now"}
+                    {syncing ? "Sending…" : "Send WhatsApp Now"}
                   </button>
 
                   {syncResult && (
                     <div className="flex items-start gap-2 text-xs font-mono text-[#39FF14]">
                       <CheckCircle2 className="w-3.5 h-3.5 mt-0.5 flex-shrink-0" />
                       <span>
-                        Checked <strong>{syncResult.processed}</strong> flight{syncResult.processed !== 1 ? "s" : ""} · <strong>{syncResult.notified}</strong> alert{syncResult.notified !== 1 ? "s" : ""} sent
+                        <strong>{syncResult.sent}</strong> message{syncResult.sent !== 1 ? "s" : ""} sent
+                        {syncResult.skipped > 0 && <span className="text-zinc-500"> · {syncResult.skipped} skipped</span>}
                         {lastSyncTime && <span className="text-zinc-500 ml-1">@ {lastSyncTime}</span>}
                       </span>
                     </div>
@@ -346,12 +347,8 @@ export function TopNav({ onUploadClick, onAfterSync }: TopNavProps) {
                     </div>
                   )}
                   {!syncResult && !syncError && lastSyncTime && (
-                    <p className="text-[10px] font-mono text-zinc-600">Last manual sync @ {lastSyncTime}</p>
+                    <p className="text-[10px] font-mono text-zinc-600">Last sent @ {lastSyncTime}</p>
                   )}
-                  <div className="flex items-center gap-1.5 text-[10px] font-mono text-zinc-600">
-                    <Clock className="w-3 h-3" />
-                    Auto-syncs every 15 min via Vercel Cron
-                  </div>
                 </div>
               </section>
 
