@@ -61,9 +61,10 @@ function EmptyTab({ onUpload }: { onUpload: () => void }) {
 }
 
 function exportCsv(flights: Flight[], label: string) {
-  const header = "Date,Type,Pax Name,Pax Count,Flight,Agent,Terminal,Time,Status,Driver,Completed,Notes";
+  const header = "File Ref,Date,Type,Pax Name,Pax Count,Flight,Agent,Terminal,Time,Status,Driver,Completed,Notes";
   const rows = flights.map((f) =>
     [
+      f.file_ref,
       f.date,
       f.type,
       `"${f.pax_name.replace(/"/g, '""')}"`,
@@ -152,7 +153,8 @@ export default function Home() {
         f.pax_name.toLowerCase().includes(q) ||
         f.flight_number.toLowerCase().includes(q) ||
         f.driver_info.toLowerCase().includes(q) ||
-        f.agent.toLowerCase().includes(q)
+        f.agent.toLowerCase().includes(q) ||
+        f.file_ref.toLowerCase().includes(q)
     );
   }, [flights, searchQuery]);
 

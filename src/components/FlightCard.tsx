@@ -13,6 +13,7 @@ type StatusOverride = "Delayed" | "Cancelled" | null;
 
 export function FlightCard({
   id,
+  file_ref,
   pax_name,
   pax_count,
   flight_number,
@@ -138,8 +139,13 @@ export function FlightCard({
             {type === "Arrival" ? "Airport Pickup" : "Hotel Transfer"}
           </div>
           <span className="text-zinc-500 text-xs font-mono">
-            {flight_number} &middot; {agent}
+            {flight_number && !flight_number.toLowerCase().startsWith("please") ? flight_number : "—"} &middot; {agent}
           </span>
+          {file_ref && (
+            <span className="text-xs font-mono text-cyan-400 bg-cyan-400/10 border border-cyan-400/20 px-2 py-0.5 rounded">
+              {file_ref}
+            </span>
+          )}
         </div>
 
         <div className="flex items-center gap-1.5">

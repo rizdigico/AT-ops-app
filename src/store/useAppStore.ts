@@ -6,6 +6,7 @@ export type TransferType = "Arrival" | "Departure";
 // UI-layer flight (what components consume)
 export interface Flight {
   id: string;
+  file_ref: string;
   date: string;
   pax_name: string;
   pax_count: number;
@@ -81,6 +82,7 @@ export function mapDbFlight(row: DbFlight): Flight {
 
   return {
     id: row.id,
+    file_ref: row.file_ref,
     date: row.date,
     pax_name: row.pax_name,
     pax_count: row.pax_count,
