@@ -3,8 +3,8 @@
 import { useState, useRef, useEffect } from "react";
 import {
   PlaneLanding, PlaneTakeoff, Users, Car, MapPin, MessageCircle,
-  CheckCircle2, Circle, Copy, Check, ChevronDown, ChevronUp,
-  AlertTriangle, XCircle, RotateCcw, FileText,
+  CheckCircle2, Circle, Copy, Check, ChevronDown,
+  AlertTriangle, XCircle, RotateCcw, FileText, ArrowRight, Building2,
 } from "lucide-react";
 import { useAppStore } from "@/store/useAppStore";
 import type { Flight } from "@/store/useAppStore";
@@ -28,6 +28,10 @@ export function FlightCard({
   completed: initialCompleted,
   notes: initialNotes,
   status_override: initialStatusOverride,
+  supplier,
+  from_location,
+  to_location,
+  services,
   isPast = false,
 }: Flight & { isPast?: boolean }) {
   const isDelayed = status === "Delayed";
@@ -216,31 +220,72 @@ export function FlightCard({
       </div>
 
       {/* ── Body ───────────────────────────────────────────────────────── */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-        <div>
-          <h2 className="text-lg font-semibold tracking-tight text-white">{pax_name}</h2>
-          <div className="flex items-center gap-4 mt-1 text-sm text-zinc-400">
+      <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-3">
+        <div className="flex-1 min-w-0">
+          <h2 className="text-lg font-semibold tracking-tight text-white leading-snug">{pax_name}</h2>
+
+          {/* Pax count + driver row */}
+          <div className="flex items-center gap-4 mt-1 text-sm text-zinc-400 flex-wrap">
             <span className="flex items-center gap-1">
               <Users className="w-3.5 h-3.5" /> {pax_count} Pax
             </span>
-            <span className="flex items-center gap-1 text-[#39FF14]">
-              <Car className="w-3.5 h-3.5" /> {driver_info}
-              <button
-                onClick={copyDriver}
-                title="Copy driver info"
-                className="ml-1 text-zinc-600 hover:text-zinc-300 transition-colors"
-              >
-                {copied ? (
-                  <Check className="w-3 h-3 text-[#39FF14]" />
-                ) : (
-                  <Copy className="w-3 h-3" />
-                )}
-              </button>
-            </span>
+            {driver_info ? (
+              <span className="flex items-center gap-1 text-[#39FF14]">
+                <Car className="w-3.5 h-3.5" />
+                <span>{driver_info}</span>
+                <button
+                  onClick={copyDriver}
+                  title="Copy driver info"
+                  className="ml-1 text-zinc-600 hover:text-zinc-300 transition-colors"
+                >
+                  {copied ? (
+                    <Check className="w-3 h-3 text-[#39FF14]" />
+                  ) : (
+                    <Copy className="w-3 h-3" />
+                  )}
+                </button>
+              </span>
+            ) : (
+              <span className="flex items-center gap-1 text-zinc-600 italic text-xs">
+                <Car className="w-3.5 h-3.5" /> Driver TBA
+              </span>
+            )}
+            {supplier && (
+              <span className="flex items-center gap-1 text-xs text-violet-400 bg-violet-400/10 border border-violet-400/20 px-2 py-0.5 rounded font-mono">
+                <Building2 className="w-3 h-3" /> {supplier}
+              </span>
+            )}
           </div>
+
+          {/* Services description */}
+          {services && (
+            <p className="mt-1.5 text-xs text-zinc-500 font-mono leading-relaxed">
+              {services}
+            </p>
+          )}
+
+          {/* From → To route */}
+          {(from_location || to_location) && (
+            <div className="flex items-center gap-1.5 mt-1.5 text-xs text-zinc-400 flex-wrap">
+              <MapPin className="w-3 h-3 text-zinc-600 shrink-0" />
+              {from_location && (
+                <span className="bg-zinc-800/60 px-2 py-0.5 rounded border border-zinc-700 max-w-[180px] truncate" title={from_location}>
+                  {from_location}
+                </span>
+              )}
+              {from_location && to_location && (
+                <ArrowRight className="w-3 h-3 text-zinc-600 shrink-0" />
+              )}
+              {to_location && (
+                <span className="bg-zinc-800/60 px-2 py-0.5 rounded border border-zinc-700 max-w-[180px] truncate" title={to_location}>
+                  {to_location}
+                </span>
+              )}
+            </div>
+          )}
         </div>
 
-        <div className="flex items-center gap-4 sm:gap-6">
+        <div className="flex items-center gap-4 sm:gap-6 shrink-0">
           <div className="flex items-center gap-2 text-zinc-300">
             <MapPin className="w-4 h-4 text-zinc-500" />
             <span className="font-mono text-sm bg-zinc-800/50 px-2 py-1 rounded border border-zinc-700">

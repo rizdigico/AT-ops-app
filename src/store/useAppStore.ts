@@ -23,6 +23,11 @@ export interface Flight {
   completed: boolean;
   notes: string | null;
   status_override: "Delayed" | "Cancelled" | null;
+  // Operational detail fields (populated after 0005 migration)
+  supplier: string | null;
+  from_location: string | null;
+  to_location: string | null;
+  services: string | null;
 }
 
 // Extended type used by 3D visualisation components
@@ -50,6 +55,11 @@ export interface DbFlight {
   notes: string | null;
   status_override: "Delayed" | "Cancelled" | null;
   created_at: string;
+  // Operational detail fields (added in migration 0005)
+  supplier: string | null;
+  from_location: string | null;
+  to_location: string | null;
+  services: string | null;
 }
 
 const SGT_FMT = new Intl.DateTimeFormat("en-SG", {
@@ -99,6 +109,10 @@ export function mapDbFlight(row: DbFlight): Flight {
     completed: row.completed ?? false,
     notes: row.notes ?? null,
     status_override: row.status_override ?? null,
+    supplier:      row.supplier      ?? null,
+    from_location: row.from_location ?? null,
+    to_location:   row.to_location   ?? null,
+    services:      row.services      ?? null,
   };
 }
 

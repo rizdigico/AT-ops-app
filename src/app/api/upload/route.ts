@@ -7,20 +7,24 @@ import { getTerminal, parseAndEnforceSGTime, inferType } from "@/lib/flight-util
 // Column name aliases — maps messy real-world headers to our internal keys
 // ---------------------------------------------------------------------------
 const COL = {
-  date:          ["date", "Date"],
-  agent:         ["agent", "Agent", "airline", "Airline"],
-  file_ref:      ["file ref", "File Ref", "fileref", "ref", "Ref", "file_ref", "ID"],
-  pax_name:      ["Passenger name", "passenger name", "fila name", "Fila Name", "pax name", "Pax Name", "passenger", "client", "name"],
-  pax_count:     ["Total Pax", "total pax", "pax", "Pax", "pax count", "Pax Count", "passengers", "no. of pax"],
-  pickup_time:   ["P.Up/ETA", "p.up/eta", "P.up/ETA", "pickup", "Pickup", "eta", "ETA", "p.up", "P.up"],
-  dropoff_time:  ["D.Off/ETD", "d.off/etd", "D.off/ETD", "dropoff", "Drop Off", "etd", "ETD", "d.off"],
-  flight:        ["flight details", "Flight Details", "flight", "Flight", "flight no", "Flight No"],
-  driver:        ["Driver contact", "driver contact", "driver name & contact", "Driver Name & Contact", "driver", "Driver", "driver name", "Driver Name"],
-  terminal:      ["Terminal", "terminal"],
-  services:      ["services", "Services", "service", "Service"],
-  from:          ["from", "From"],
-  to:            ["to", "To"],
-  supplier:      ["supplier", "Supplier"],
+  date:          ["date"],
+  agent:         ["agent", "airline"],
+  file_ref:      ["file ref", "fileref", "ref", "file_ref", "id"],
+  pax_name:      ["passenger name", "fila name", "pax name", "passenger", "client", "name"],
+  pax_count:     ["total pax", "pax", "pax count", "passengers", "no. of pax"],
+  pickup_time:   ["p.up/eta", "pickup", "eta", "p.up"],
+  dropoff_time:  ["d.off/etd", "dropoff", "drop off", "etd", "d.off"],
+  flight:        ["flight details", "flight", "flight no"],
+  // "driver contact", "t" (single-letter terminal col) — normalised to lowercase by pick()
+  // "__empty_1" handles the Apr 8-14 sheet pattern where col K has no header (xlsx
+  // names empty-header columns __EMPTY, __EMPTY_1, … in order of first appearance)
+  driver:        ["driver contact", "driver name & contact", "driver", "driver name", "__empty_1"],
+  // "t" handles the abbreviated "T" header used in some sheets
+  terminal:      ["terminal", "t"],
+  services:      ["services", "service"],
+  from:          ["from"],
+  to:            ["to"],
+  supplier:      ["supplier"],
 } as const;
 
 function pick(row: Record<string, unknown>, keys: readonly string[]): unknown {
@@ -144,6 +148,10 @@ export async function POST(req: NextRequest) {
           timeZone: "Asia/Singapore",
         });
 
+      const driver_raw = safeStr(pick(row, COL.driver));
+      // Normalise "N/A", "NA", "n/a" etc. → null (no driver assigned yet)
+      const driver_info = /^n\/?a$/i.test(driver_raw.trim()) ? null : (driver_raw || null);
+
       records.push({
         file_ref,
         date,
@@ -155,8 +163,12 @@ export async function POST(req: NextRequest) {
         type,
         scheduled_time,
         updated_time:  null,
-        driver_info:   safeStr(pick(row, COL.driver))         || null,
+        driver_info,
         notified:      false,
+        services:      services                                || null,
+        from_location: from                                    || null,
+        to_location:   to                                      || null,
+        supplier:      safeStr(pick(row, COL.supplier))       || null,
       });
     }
 
@@ -218,9 +230,18 @@ export async function POST(req: NextRequest) {
       notified: notifiedSet.has(`${r.file_ref}|${r.scheduled_time}`),
     }));
 
-    const { error: insertError } = await supabaseAdmin
+    let { error: insertError } = await supabaseAdmin
       .from("flights")
       .insert(toInsert);
+
+    // Graceful fallback: if insert fails due to missing optional columns (e.g. before
+    // the 0005 migration is applied), strip the new fields and retry.
+    if (insertError?.code === "42703") {
+      console.warn("[upload] New columns not yet migrated — retrying without optional fields");
+      const coreOnly = toInsert.map(({ services, from_location, to_location, supplier, ...core }) => core);
+      const retry = await supabaseAdmin.from("flights").insert(coreOnly);
+      insertError = retry.error;
+    }
 
     if (insertError) {
       console.error("[upload] Insert error:", insertError);
