@@ -30,7 +30,7 @@ export async function POST() {
       .from("flights")
       .select("*")
       .eq("notified", false)
-      .neq("status_override", "Cancelled")
+      .or("status_override.is.null,status_override.neq.Cancelled")
       .gte("scheduled_time", nowIso)
       .order("scheduled_time", { ascending: true });
 
