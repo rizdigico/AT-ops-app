@@ -24,8 +24,14 @@ const COL = {
 } as const;
 
 function pick(row: Record<string, unknown>, keys: readonly string[]): unknown {
+  // Case-insensitive lookup — normalise all row keys to lowercase once
+  const lowerMap: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(row)) {
+    lowerMap[k.toLowerCase().trim()] = v;
+  }
   for (const k of keys) {
-    if (row[k] !== undefined && row[k] !== null && row[k] !== "") return row[k];
+    const v = lowerMap[k.toLowerCase().trim()];
+    if (v !== undefined && v !== null && v !== "") return v;
   }
   return undefined;
 }
