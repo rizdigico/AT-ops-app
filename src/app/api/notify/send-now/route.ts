@@ -1,4 +1,4 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { format } from "date-fns";
 import { toZonedTime } from "date-fns-tz";
 import { supabaseAdmin } from "@/utils/supabase/admin";
@@ -11,84 +11,140 @@ const TZ = "Asia/Singapore";
 /**
  * POST /api/notify/send-now
  *
- * Immediately sends a WhatsApp notification for every unnotified, non-cancelled
- * flight scheduled from now onwards (today + future).  No time-window gating —
- * the dispatcher pressing "Send Now" wants an instant blast regardless of how
- * far out the transfers are.
+ * Sends a WhatsApp notification for ONE flight at a time.
  *
- * Returns { success, sent, skipped } where:
- *   sent    = number of flights a WhatsApp message was dispatched for
- *   skipped = flights that were already notified or had no useful data
+ * Body (optional JSON):
+ *   { flightId: string }  — send this specific flight
+ *   {}                    — send the next unnotified upcoming flight
+ *
+ * Returns:
+ *   { success, sent, skipped, remaining, flight?, error? }
+ *
+ * A flight is only marked notified=true if sendWhatsAppAlert() resolves
+ * without throwing — so a silent API failure never incorrectly marks a
+ * flight as notified.
  */
-export async function POST() {
+export async function POST(req: NextRequest) {
   try {
+    const body = await req.json().catch(() => ({})) as { flightId?: string };
+    const targetId = body.flightId ?? null;
+
     const now = new Date();
     const nowIso = now.toISOString();
 
-    // Fetch all unnotified, non-cancelled upcoming flights
-    const { data: flights, error } = await supabaseAdmin
+    // Build query for one flight
+    let query = supabaseAdmin
       .from("flights")
       .select("*")
       .eq("notified", false)
       .or("status_override.is.null,status_override.neq.Cancelled")
       .gte("scheduled_time", nowIso)
-      .order("scheduled_time", { ascending: true });
+      .order("scheduled_time", { ascending: true })
+      .limit(1);
 
-    if (error) {
-      console.error("[notify/send-now] DB fetch error:", error);
-      return NextResponse.json({ success: false, error: error.message }, { status: 500 });
+    if (targetId) {
+      // Override: send a specific flight regardless of its position in the queue
+      query = supabaseAdmin
+        .from("flights")
+        .select("*")
+        .eq("id", targetId)
+        .eq("notified", false)
+        .limit(1);
+    }
+
+    const { data: flights, error: fetchErr } = await query;
+
+    if (fetchErr) {
+      console.error("[notify/send-now] DB fetch error:", fetchErr);
+      return NextResponse.json({ success: false, error: fetchErr.message }, { status: 500 });
     }
 
     if (!flights?.length) {
-      return NextResponse.json({ success: true, sent: 0, skipped: 0, message: "No upcoming unnotified flights." });
+      return NextResponse.json({
+        success: true,
+        sent: 0,
+        skipped: 0,
+        remaining: 0,
+        message: targetId
+          ? "Flight not found or already notified."
+          : "No unnotified upcoming flights.",
+      });
     }
 
-    let sent = 0;
-    let skipped = 0;
+    const flight = flights[0];
 
-    for (const flight of flights) {
-      const sgtTime = format(toZonedTime(new Date(flight.scheduled_time), TZ), "HH:mm");
-      const sgtDate = format(toZonedTime(new Date(flight.scheduled_time), TZ), "dd MMM");
+    const sgtTime = format(toZonedTime(new Date(flight.scheduled_time), TZ), "HH:mm");
+    const sgtDate = format(toZonedTime(new Date(flight.scheduled_time), TZ), "dd MMM");
+    const driver   = flight.driver_info   || "TBA";
+    const terminal = flight.terminal      || "TBC";
+    const flightNo = flight.flight_number || "N/A";
 
-      const driver   = flight.driver_info || "TBA";
-      const terminal = flight.terminal    || "TBC";
-      const flightNo = flight.flight_number || "N/A";
-
-      let message: string;
-
-      if (flight.type === "Arrival") {
-        message =
-          `✈️ ARRIVAL | ${sgtDate} ${sgtTime} SGT\n` +
-          `Pax: ${flight.pax_name}\n` +
-          `Flight: ${flightNo}  Terminal: ${terminal}\n` +
-          `Driver: ${driver}\n` +
-          `Ref: ${flight.file_ref}`;
-      } else {
-        message =
-          `🚗 DEPARTURE | ${sgtDate} ${sgtTime} SGT (hotel pickup)\n` +
-          `Pax: ${flight.pax_name}\n` +
-          `Flight: ${flightNo}  Terminal: ${terminal}\n` +
-          `Driver: ${driver}\n` +
-          `Ref: ${flight.file_ref}`;
-      }
-
-      try {
-        await sendWhatsAppAlert(message);
-
-        // Mark as notified so this flight isn't blasted again
-        await supabaseAdmin
-          .from("flights")
-          .update({ notified: true })
-          .eq("id", flight.id);
-
-        sent++;
-      } catch (err) {
-        console.error(`[notify/send-now] Failed for flight ${flight.id}:`, err);
-        skipped++;
-      }
+    let message: string;
+    if (flight.type === "Arrival") {
+      message =
+        `✈️ ARRIVAL | ${sgtDate} ${sgtTime} SGT\n` +
+        `Pax: ${flight.pax_name}\n` +
+        `Flight: ${flightNo}  Terminal: ${terminal}\n` +
+        `Driver: ${driver}\n` +
+        `Ref: ${flight.file_ref}`;
+    } else if (flight.type === "Tour") {
+      message =
+        `🗺️ TOUR | ${sgtDate} ${sgtTime} SGT\n` +
+        `Pax: ${flight.pax_name}\n` +
+        `Service: ${flight.services || "City Tour"}\n` +
+        `Driver: ${driver}\n` +
+        `Ref: ${flight.file_ref}`;
+    } else {
+      // Departure
+      message =
+        `🚗 DEPARTURE | ${sgtDate} ${sgtTime} SGT (hotel pickup)\n` +
+        `Pax: ${flight.pax_name}\n` +
+        `Flight: ${flightNo}  Terminal: ${terminal}\n` +
+        `Driver: ${driver}\n` +
+        `Ref: ${flight.file_ref}`;
     }
 
-    return NextResponse.json({ success: true, sent, skipped });
+    try {
+      await sendWhatsAppAlert(message);
+    } catch (waErr) {
+      // Message was NOT sent — do NOT mark as notified
+      const errMsg = waErr instanceof Error ? waErr.message : "Unknown WhatsApp error";
+      console.error("[notify/send-now] WhatsApp send failed:", errMsg);
+      return NextResponse.json({
+        success: false,
+        sent: 0,
+        skipped: 1,
+        error: errMsg,
+      });
+    }
+
+    // Message confirmed sent — now mark notified
+    await supabaseAdmin
+      .from("flights")
+      .update({ notified: true })
+      .eq("id", flight.id);
+
+    // Count remaining unnotified upcoming flights
+    const { count: remaining } = await supabaseAdmin
+      .from("flights")
+      .select("id", { count: "exact", head: true })
+      .eq("notified", false)
+      .or("status_override.is.null,status_override.neq.Cancelled")
+      .gte("scheduled_time", nowIso);
+
+    return NextResponse.json({
+      success: true,
+      sent: 1,
+      skipped: 0,
+      remaining: remaining ?? 0,
+      flight: {
+        id: flight.id,
+        pax_name: flight.pax_name,
+        type: flight.type,
+        sgtTime,
+        sgtDate,
+      },
+    });
   } catch (err) {
     console.error("[notify/send-now] Unhandled error:", err);
     return NextResponse.json({ success: false, error: "Internal server error" }, { status: 500 });

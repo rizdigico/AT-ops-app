@@ -3,8 +3,8 @@
 import { useEffect, useState, useCallback, useRef } from "react";
 import {
   Plane, Menu, Bell, BellOff, UploadCloud, X,
-  RefreshCw, Activity, Download, Info, Wifi, WifiOff,
-  CheckCircle2, AlertTriangle, Clock,
+  Activity, Download, Info, Wifi, WifiOff,
+  CheckCircle2, AlertTriangle, RotateCcw, Loader2,
 } from "lucide-react";
 import { useAppStore } from "@/store/useAppStore";
 import type { Flight } from "@/store/useAppStore";
@@ -78,6 +78,31 @@ function exportAllCsv(flights: Flight[]) {
   URL.revokeObjectURL(url);
 }
 
+// ── Queue item type ────────────────────────────────────────────────────────────
+
+interface QueueFlight {
+  id: string;
+  pax_name: string;
+  type: string;
+  flight_number: string | null;
+  driver_info: string | null;
+  terminal: string | null;
+  file_ref: string;
+  services: string | null;
+  sgtTime: string;
+  sgtDate: string;
+  minsUntil: number;
+  isDue: boolean;
+}
+
+function minsUntilLabel(mins: number): string {
+  if (mins <= 0) return "now";
+  if (mins < 60) return `${mins}m`;
+  const h = Math.floor(mins / 60);
+  const m = mins % 60;
+  return m > 0 ? `${h}h ${m}m` : `${h}h`;
+}
+
 // ── Component ─────────────────────────────────────────────────────────────────
 
 export function TopNav({ onUploadClick, onAfterSync }: TopNavProps) {
@@ -88,16 +113,22 @@ export function TopNav({ onUploadClick, onAfterSync }: TopNavProps) {
   const [pushLoading, setPushLoading] = useState(false);
   const [pushSupported, setPushSupported] = useState(false);
 
-  // Menu drawer state
+  // Drawer
   const [menuOpen, setMenuOpen] = useState(false);
-  const [syncing, setSyncing] = useState(false);
-  const [syncResult, setSyncResult] = useState<{ sent: number; skipped: number } | null>(null);
-  const [syncError, setSyncError] = useState<string | null>(null);
-  const [lastSyncTime, setLastSyncTime] = useState<string | null>(null);
+  const drawerRef = useRef<HTMLDivElement>(null);
+
+  // Notification queue state
+  const [queue, setQueue] = useState<QueueFlight[]>([]);
+  const [queueLoading, setQueueLoading] = useState(false);
+  const [sendingId, setSendingId] = useState<string | null>(null);
+  const [lastSent, setLastSent] = useState<{ pax_name: string; time: string } | null>(null);
+  const [sendError, setSendError] = useState<string | null>(null);
+  const [resetting, setResetting] = useState(false);
+
+  // API usage
   const [apiUsage, setApiUsage] = useState<{ used: number; limit: number } | null>(null);
   const [apiLoading, setApiLoading] = useState(false);
   const [realtimeOk, setRealtimeOk] = useState(true);
-  const drawerRef = useRef<HTMLDivElement>(null);
 
   // Live clock
   useEffect(() => {
@@ -122,21 +153,39 @@ export function TopNav({ onUploadClick, onAfterSync }: TopNavProps) {
     });
   }, []);
 
-  // Realtime heartbeat — treat flights array as a proxy for connection health
-  useEffect(() => {
-    setRealtimeOk(true);
-  }, [flights]);
+  // Realtime heartbeat
+  useEffect(() => { setRealtimeOk(true); }, [flights]);
 
-  // Fetch API usage when drawer opens
-  useEffect(() => {
-    if (!menuOpen) return;
+  // Fetch notification queue
+  const fetchQueue = useCallback(async () => {
+    setQueueLoading(true);
+    try {
+      const res = await fetch("/api/notify/queue");
+      const data = await res.json() as { flights?: QueueFlight[]; error?: string };
+      if (data.flights) setQueue(data.flights);
+    } catch {
+      // silent — queue just stays stale
+    } finally {
+      setQueueLoading(false);
+    }
+  }, []);
+
+  // Fetch API usage
+  const fetchApiUsage = useCallback(async () => {
     setApiLoading(true);
     fetch("/api/stats/api-usage")
       .then((r) => r.json())
       .then((d: { used: number; limit: number }) => setApiUsage(d))
       .catch(() => {})
       .finally(() => setApiLoading(false));
-  }, [menuOpen]);
+  }, []);
+
+  // Load data when drawer opens
+  useEffect(() => {
+    if (!menuOpen) return;
+    fetchQueue();
+    fetchApiUsage();
+  }, [menuOpen, fetchQueue, fetchApiUsage]);
 
   // Close drawer on Escape
   useEffect(() => {
@@ -161,36 +210,74 @@ export function TopNav({ onUploadClick, onAfterSync }: TopNavProps) {
     setPushLoading(false);
   }, [pushEnabled, pushLoading]);
 
-  const handleSendNow = useCallback(async () => {
-    if (syncing) return;
-    setSyncing(true);
-    setSyncResult(null);
-    setSyncError(null);
+  // Send a specific flight notification
+  const handleSendFlight = useCallback(async (flightId: string) => {
+    if (sendingId) return;
+    setSendingId(flightId);
+    setSendError(null);
     try {
-      const res = await fetch("/api/notify/send-now", { method: "POST" });
-      const data = await res.json() as { success: boolean; sent?: number; skipped?: number; message?: string; error?: string };
-      if (data.success) {
-        setSyncResult({ sent: data.sent ?? 0, skipped: data.skipped ?? 0 });
-        setLastSyncTime(new Date().toLocaleTimeString("en-SG", { timeZone: "Asia/Singapore", hour: "2-digit", minute: "2-digit", hour12: false }));
+      const res = await fetch("/api/notify/send-now", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ flightId }),
+      });
+      const data = await res.json() as {
+        success: boolean;
+        sent?: number;
+        remaining?: number;
+        flight?: { pax_name: string };
+        error?: string;
+      };
+      if (data.success && (data.sent ?? 0) > 0) {
+        const nowStr = new Date().toLocaleTimeString("en-SG", {
+          timeZone: "Asia/Singapore", hour: "2-digit", minute: "2-digit", hour12: false,
+        });
+        setLastSent({ pax_name: data.flight?.pax_name ?? "flight", time: nowStr });
         onAfterSync?.();
+        await fetchQueue();
       } else {
-        setSyncError(data.error ?? "Failed to send notifications");
+        setSendError(data.error ?? "Send failed — no message delivered");
       }
     } catch {
-      setSyncError("Network error — check connection");
+      setSendError("Network error — check connection");
     } finally {
-      setSyncing(false);
+      setSendingId(null);
     }
-  }, [syncing, onAfterSync]);
+  }, [sendingId, fetchQueue, onAfterSync]);
+
+  // Reset all notification flags
+  const handleReset = useCallback(async () => {
+    if (resetting) return;
+    setResetting(true);
+    setSendError(null);
+    try {
+      const res = await fetch("/api/notify/queue", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "reset" }),
+      });
+      const data = await res.json() as { success?: boolean; reset?: number; error?: string };
+      if (data.success) {
+        setLastSent(null);
+        await fetchQueue();
+      } else {
+        setSendError(data.error ?? "Reset failed");
+      }
+    } catch {
+      setSendError("Network error during reset");
+    } finally {
+      setResetting(false);
+    }
+  }, [resetting, fetchQueue]);
 
   // ── Derived values ──────────────────────────────────────────────────────────
-  const apiPct = apiUsage ? Math.min((apiUsage.used / apiUsage.limit) * 100, 100) : 0;
+  const apiPct      = apiUsage ? Math.min((apiUsage.used / apiUsage.limit) * 100, 100) : 0;
   const apiCritical = apiPct >= 95;
   const apiWarning  = apiPct >= 80;
-
   const totalFlights = flights.length;
   const todaySGT = new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Singapore" });
   const todayCount = flights.filter((f) => f.date === todaySGT).length;
+  const dueCount = queue.filter((q) => q.isDue).length;
 
   return (
     <>
@@ -247,10 +334,14 @@ export function TopNav({ onUploadClick, onAfterSync }: TopNavProps) {
             )}
             <button
               onClick={() => setMenuOpen(true)}
-              className="p-2 text-zinc-400 hover:text-white transition-colors"
+              className="relative p-2 text-zinc-400 hover:text-white transition-colors"
               aria-label="Open menu"
             >
               <Menu className="w-5 h-5" />
+              {/* Badge for due notifications */}
+              {dueCount > 0 && (
+                <span className="absolute top-1 right-1 w-2 h-2 bg-amber-400 rounded-full animate-pulse" />
+              )}
             </button>
           </div>
         </div>
@@ -264,16 +355,14 @@ export function TopNav({ onUploadClick, onAfterSync }: TopNavProps) {
         )}
       </nav>
 
-      {/* ── Drawer overlay ──────────────────────────────────────────────────── */}
+      {/* ── Drawer ─────────────────────────────────────────────────────────── */}
       {menuOpen && (
         <div className="fixed inset-0 z-50 flex justify-end">
-          {/* Backdrop */}
           <div
             className="absolute inset-0 bg-black/60 backdrop-blur-sm"
             onClick={() => setMenuOpen(false)}
           />
 
-          {/* Drawer panel */}
           <div
             ref={drawerRef}
             className="relative z-10 w-80 h-full bg-zinc-950 border-l border-zinc-800 flex flex-col overflow-hidden"
@@ -295,12 +384,12 @@ export function TopNav({ onUploadClick, onAfterSync }: TopNavProps) {
             {/* Drawer body */}
             <div className="flex-1 overflow-y-auto px-5 py-5 space-y-6">
 
-              {/* ── Section: Quick Stats ────────────────────────────── */}
+              {/* ── Overview ── */}
               <section>
                 <p className="text-[10px] uppercase tracking-widest text-zinc-500 font-mono font-semibold mb-3">Overview</p>
                 <div className="grid grid-cols-2 gap-2">
                   <div className="bg-zinc-900 border border-zinc-800 rounded-lg px-3 py-2.5">
-                    <p className="text-[10px] text-zinc-500 font-mono mb-0.5">Total Flights</p>
+                    <p className="text-[10px] text-zinc-500 font-mono mb-0.5">Total Jobs</p>
                     <p className="text-xl font-bold font-mono text-white tabular-nums">{totalFlights}</p>
                   </div>
                   <div className="bg-zinc-900 border border-zinc-800 rounded-lg px-3 py-2.5">
@@ -310,49 +399,104 @@ export function TopNav({ onUploadClick, onAfterSync }: TopNavProps) {
                 </div>
               </section>
 
-              {/* ── Section: WhatsApp Notifications ─────────────────── */}
+              {/* ── WhatsApp Notification Queue ── */}
               <section>
-                <p className="text-[10px] uppercase tracking-widest text-zinc-500 font-mono font-semibold mb-3">WhatsApp Alerts</p>
-                <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-4 space-y-3">
-                  <p className="text-xs text-zinc-400 leading-relaxed">
-                    Instantly blast WhatsApp notifications for all upcoming unnotified transfers — driver, terminal, time, and pax details.
+                <div className="flex items-center justify-between mb-3">
+                  <p className="text-[10px] uppercase tracking-widest text-zinc-500 font-mono font-semibold">
+                    WhatsApp Queue
+                    {queue.length > 0 && (
+                      <span className="ml-2 text-zinc-600">· {queue.length} pending</span>
+                    )}
+                    {dueCount > 0 && (
+                      <span className="ml-1.5 text-amber-400 animate-pulse">· {dueCount} DUE</span>
+                    )}
                   </p>
                   <button
-                    onClick={handleSendNow}
-                    disabled={syncing}
-                    className={`w-full flex items-center justify-center gap-2 px-3 py-2.5 rounded-lg text-xs font-mono font-semibold uppercase tracking-wider transition-all
-                      ${syncing
-                        ? "bg-zinc-800 text-zinc-500 cursor-wait"
-                        : "bg-[#25D366] text-black hover:bg-[#1ebe5d]"
-                      }`}
+                    onClick={handleReset}
+                    disabled={resetting}
+                    title="Reset notification flags — re-arms all upcoming flights"
+                    className="flex items-center gap-1 text-[10px] text-zinc-500 hover:text-zinc-300 font-mono transition-colors disabled:opacity-50"
                   >
-                    <RefreshCw className={`w-3.5 h-3.5 ${syncing ? "animate-spin" : ""}`} />
-                    {syncing ? "Sending…" : "Send WhatsApp Now"}
+                    <RotateCcw className={`w-3 h-3 ${resetting ? "animate-spin" : ""}`} />
+                    Reset All
                   </button>
+                </div>
 
-                  {syncResult && (
-                    <div className="flex items-start gap-2 text-xs font-mono text-[#39FF14]">
-                      <CheckCircle2 className="w-3.5 h-3.5 mt-0.5 flex-shrink-0" />
-                      <span>
-                        <strong>{syncResult.sent}</strong> message{syncResult.sent !== 1 ? "s" : ""} sent
-                        {syncResult.skipped > 0 && <span className="text-zinc-500"> · {syncResult.skipped} skipped</span>}
-                        {lastSyncTime && <span className="text-zinc-500 ml-1">@ {lastSyncTime}</span>}
-                      </span>
+                <div className="bg-zinc-900 border border-zinc-800 rounded-lg overflow-hidden">
+                  {queueLoading ? (
+                    <div className="flex items-center gap-2 px-4 py-4 text-xs text-zinc-500 font-mono">
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" /> Loading queue…
+                    </div>
+                  ) : queue.length === 0 ? (
+                    <div className="flex items-center gap-2 px-4 py-4 text-xs text-[#39FF14] font-mono">
+                      <CheckCircle2 className="w-4 h-4" />
+                      All caught up! No pending notifications.
+                    </div>
+                  ) : (
+                    <div className="divide-y divide-zinc-800 max-h-72 overflow-y-auto">
+                      {queue.map((f) => (
+                        <div
+                          key={f.id}
+                          className="flex items-center justify-between px-3 py-2.5 gap-3"
+                          style={{ background: f.isDue ? "rgba(120,53,15,0.15)" : "transparent" }}
+                        >
+                          <div className="flex-1 min-w-0">
+                            <div className="text-xs font-semibold text-white truncate leading-snug">
+                              {f.pax_name}
+                            </div>
+                            <div className="text-[10px] text-zinc-500 font-mono mt-0.5">
+                              {f.type === "Arrival" ? "✈️" : f.type === "Tour" ? "🗺️" : "🚗"}{" "}
+                              {f.sgtTime} · {f.sgtDate}
+                              {f.driver_info && (
+                                <span className="ml-1.5 text-zinc-600">· {f.driver_info.split(" ")[0]}</span>
+                              )}
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-2 shrink-0">
+                            {f.isDue ? (
+                              <span className="text-[10px] font-bold text-amber-400 bg-amber-950 border border-amber-900 px-1.5 py-0.5 rounded animate-pulse whitespace-nowrap">
+                                DUE
+                              </span>
+                            ) : (
+                              <span className="text-[10px] text-zinc-600 font-mono whitespace-nowrap">
+                                in {minsUntilLabel(f.minsUntil)}
+                              </span>
+                            )}
+                            <button
+                              onClick={() => handleSendFlight(f.id)}
+                              disabled={!!sendingId}
+                              className={`text-[11px] font-mono font-bold px-2.5 py-1.5 rounded-lg transition-colors whitespace-nowrap ${
+                                sendingId === f.id
+                                  ? "bg-zinc-700 text-zinc-400 cursor-wait"
+                                  : "bg-[#25D366] text-black hover:bg-[#1ebe5d]"
+                              } disabled:opacity-50`}
+                            >
+                              {sendingId === f.id ? <Loader2 className="w-3 h-3 animate-spin inline" /> : "Send"}
+                            </button>
+                          </div>
+                        </div>
+                      ))}
                     </div>
                   )}
-                  {syncError && (
-                    <div className="flex items-center gap-2 text-xs font-mono text-rose-400">
-                      <AlertTriangle className="w-3.5 h-3.5 flex-shrink-0" />
-                      <span>{syncError}</span>
+
+                  {/* Status bar */}
+                  {(lastSent || sendError) && (
+                    <div className={`px-3 py-2 border-t border-zinc-800 text-[10px] font-mono flex items-start gap-2 ${sendError ? "text-rose-400" : "text-[#39FF14]"}`}>
+                      {sendError
+                        ? <><AlertTriangle className="w-3 h-3 mt-0.5 shrink-0" /><span className="break-all">{sendError}</span></>
+                        : <><CheckCircle2 className="w-3 h-3 mt-0.5 shrink-0" /><span>Sent to <strong>{lastSent?.pax_name}</strong> @ {lastSent?.time}</span></>
+                      }
                     </div>
-                  )}
-                  {!syncResult && !syncError && lastSyncTime && (
-                    <p className="text-[10px] font-mono text-zinc-600">Last sent @ {lastSyncTime}</p>
                   )}
                 </div>
+
+                <p className="text-[10px] text-zinc-600 font-mono mt-2 leading-relaxed">
+                  Send notifications one by one. Flights marked <span className="text-amber-400">DUE</span> are within 1 hour of service start.
+                  If flights are missing, press <em>Reset All</em> to re-arm the queue.
+                </p>
               </section>
 
-              {/* ── Section: API Quota ──────────────────────────────── */}
+              {/* ── Aviationstack Quota ── */}
               <section>
                 <p className="text-[10px] uppercase tracking-widest text-zinc-500 font-mono font-semibold mb-3">Aviationstack Quota</p>
                 <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-4 space-y-3">
@@ -384,15 +528,15 @@ export function TopNav({ onUploadClick, onAfterSync }: TopNavProps) {
                 </div>
               </section>
 
-              {/* ── Section: Export ─────────────────────────────────── */}
+              {/* ── Export ── */}
               <section>
                 <p className="text-[10px] uppercase tracking-widest text-zinc-500 font-mono font-semibold mb-3">Data Export</p>
                 <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-4 space-y-3">
                   <p className="text-xs text-zinc-400">
-                    Download all {totalFlights} scheduled flights across all dates as CSV.
+                    Download all {totalFlights} jobs as CSV.
                   </p>
                   <button
-                    onClick={() => { exportAllCsv(flights); }}
+                    onClick={() => exportAllCsv(flights)}
                     disabled={totalFlights === 0}
                     className="w-full flex items-center justify-center gap-2 px-3 py-2.5 rounded-lg text-xs font-mono font-semibold uppercase tracking-wider border border-zinc-700 text-zinc-300 hover:border-zinc-500 hover:text-white transition-all disabled:opacity-30 disabled:cursor-not-allowed"
                   >
@@ -402,7 +546,7 @@ export function TopNav({ onUploadClick, onAfterSync }: TopNavProps) {
                 </div>
               </section>
 
-              {/* ── Section: System Status ──────────────────────────── */}
+              {/* ── System Status ── */}
               <section>
                 <p className="text-[10px] uppercase tracking-widest text-zinc-500 font-mono font-semibold mb-3">System</p>
                 <div className="bg-zinc-900 border border-zinc-800 rounded-lg divide-y divide-zinc-800">
@@ -438,7 +582,7 @@ export function TopNav({ onUploadClick, onAfterSync }: TopNavProps) {
                 </div>
               </section>
 
-              {/* ── Section: About ──────────────────────────────────── */}
+              {/* ── About ── */}
               <section>
                 <p className="text-[10px] uppercase tracking-widest text-zinc-500 font-mono font-semibold mb-3">About</p>
                 <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-4 space-y-2">
@@ -450,7 +594,7 @@ export function TopNav({ onUploadClick, onAfterSync }: TopNavProps) {
                   </div>
                   <p className="text-[10px] font-mono text-zinc-500 leading-relaxed">
                     Airport Transfer Operations Command Centre.<br />
-                    Powered by Aviationstack · Supabase · Next.js · Vercel.
+                    Powered by CallMeBot · Supabase · Next.js · Vercel.
                   </p>
                   <div className="flex items-center gap-1.5 text-[10px] font-mono text-zinc-600">
                     <Info className="w-3 h-3" />
