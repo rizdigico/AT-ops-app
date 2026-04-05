@@ -109,10 +109,15 @@ export function parseAndEnforceSGTime(
 // ---------------------------------------------------------------------------
 // Infer transfer type from common Excel column values
 // ---------------------------------------------------------------------------
-export function inferType(services?: string, from?: string, to?: string): "Arrival" | "Departure" {
+export function inferType(services?: string, from?: string, to?: string): "Arrival" | "Departure" | "Tour" {
   const svc = (services ?? "").toLowerCase();
   const frm = (from ?? "").toLowerCase();
   const to_ = (to ?? "").toLowerCase();
+
+  // Tour detection — city tours, half/full day tours, point-to-point city transfers
+  if (/\btour\b|half.?day|full.?day|city tour|sightseeing/i.test(svc)) return "Tour";
+  // Same from/to location suggests a round-trip tour (not an airport transfer)
+  if (frm && frm === to_ && !/changi|airport|terminal/i.test(frm)) return "Tour";
 
   // Explicit keywords in service description take priority
   if (/\barrival\b|\barr\b/.test(svc)) return "Arrival";

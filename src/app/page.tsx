@@ -2,97 +2,46 @@
 
 import { useEffect, useCallback, useState, useRef, useMemo } from "react";
 import { TopNav } from "@/components/TopNav";
-import { StatsRow } from "@/components/StatsRow";
 import { FlightCard } from "@/components/FlightCard";
 import { ScheduleUploader } from "@/components/ScheduleUploader";
-import { WeeklyStrip } from "@/components/WeeklyStrip";
-import { ApiUsageCounter } from "@/components/ApiUsageCounter";
-import { useAppStore, mapDbFlight, DbFlight, Flight, TabId } from "@/store/useAppStore";
+import { useAppStore, mapDbFlight, DbFlight } from "@/store/useAppStore";
 import { createClient } from "@/utils/supabase/client";
 import {
-  Radio, Loader2, Trash2, ArrowLeft,
-  CalendarDays, Clock, History, AlertTriangle, XCircle,
-  Search, X, Download,
+  Radio, Loader2, Trash2, ArrowLeft, Search, X,
+  PlaneLanding, PlaneTakeoff, Map,
 } from "lucide-react";
 
 const supabase = createClient();
 
-const TABS: { id: TabId; label: string; Icon: React.FC<{ className?: string }> }[] = [
-  { id: "today",     label: "Today",     Icon: CalendarDays   },
-  { id: "upcoming",  label: "Upcoming",  Icon: Clock          },
-  { id: "past",      label: "Past",      Icon: History        },
-  { id: "delayed",   label: "Delayed",   Icon: AlertTriangle  },
-  { id: "cancelled", label: "Cancelled", Icon: XCircle        },
+type FilterType = "All" | "Arrival" | "Departure" | "Tour";
+
+const TYPE_TABS: { id: FilterType; label: string; Icon?: React.FC<{ className?: string }>; accent: string }[] = [
+  { id: "All",       label: "All",        accent: "#60a5fa" },
+  { id: "Arrival",   label: "Arrivals",   Icon: PlaneLanding,  accent: "#4ade80" },
+  { id: "Departure", label: "Departures", Icon: PlaneTakeoff, accent: "#60a5fa" },
+  { id: "Tour",      label: "Tours",      Icon: Map,           accent: "#f59e0b" },
 ];
 
-function formatDayLabel(dateStr: string): string {
+function dateChipLabel(dateStr: string): string {
   const d = new Date(dateStr + "T12:00:00+08:00");
-  return d.toLocaleDateString("en-SG", {
-    weekday: "long", day: "numeric", month: "long",
-    timeZone: "Asia/Singapore",
-  });
+  return `${d.getDate()}/${d.getMonth() + 1}`;
 }
 
-function DayGroup({ date, flights, isPast }: { date: string; flights: Flight[]; isPast?: boolean }) {
-  return (
-    <div id={`date-group-${date}`} className="mb-6">
-      <div className="flex items-center gap-2 mb-3">
-        <span className="text-[10px] uppercase tracking-widest text-zinc-500 font-mono font-semibold">
-          {formatDayLabel(date)}
-        </span>
-        <span className="text-[10px] text-zinc-700 font-mono">· {flights.length}</span>
-        <div className="flex-1 h-px bg-zinc-800 ml-1" />
-      </div>
-      {flights.map((f) => <FlightCard key={f.id} {...f} isPast={isPast} />)}
-    </div>
-  );
-}
-
-function EmptyTab({ onUpload }: { onUpload: () => void }) {
-  return (
-    <div className="flex flex-col items-center justify-center py-16 text-zinc-600 gap-3">
-      <Radio className="w-7 h-7" />
-      <p className="text-sm">Nothing here.</p>
-      <button onClick={onUpload} className="text-xs text-[#00f3ff] hover:underline font-mono">
-        Upload a schedule →
-      </button>
-    </div>
-  );
-}
-
-function exportCsv(flights: Flight[], label: string) {
-  const header = "File Ref,Date,Type,Pax Name,Pax Count,Flight,Agent,Terminal,Time,Status,Driver,Completed,Notes";
-  const rows = flights.map((f) =>
-    [
-      f.file_ref,
-      f.date,
-      f.type,
-      `"${f.pax_name.replace(/"/g, '""')}"`,
-      f.pax_count,
-      f.flight_number,
-      f.agent,
-      f.terminal,
-      f.scheduled_time,
-      f.status,
-      `"${(f.driver_info ?? "").replace(/"/g, '""')}"`,
-      f.completed ? "Yes" : "No",
-      `"${(f.notes ?? "").replace(/"/g, '""')}"`,
-    ].join(",")
-  );
-  const csv = [header, ...rows].join("\n");
-  const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = `AT_Ops_${label}_${new Date().toISOString().slice(0, 10)}.csv`;
-  a.click();
-  URL.revokeObjectURL(url);
+function dateRangeString(dates: string[]): string {
+  if (dates.length === 0) return "Singapore Changi · SGT (UTC+8)";
+  const fmt = (s: string) => {
+    const d = new Date(s + "T12:00:00+08:00");
+    return d.toLocaleDateString("en-SG", { day: "numeric", month: "short", timeZone: "Asia/Singapore" });
+  };
+  if (dates.length === 1) return `${fmt(dates[0])} · SGT (UTC+8)`;
+  return `${fmt(dates[0])} – ${fmt(dates[dates.length - 1])} · SGT (UTC+8)`;
 }
 
 export default function Home() {
   const [showUpload, setShowUpload] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
-  const [selectedDate, setSelectedDate] = useState<string | null>(null);
+  const [activeType, setActiveType] = useState<FilterType>("All");
+  const [activeDate, setActiveDate] = useState<string>("All");
 
   const [clearStage, setClearStage] = useState<"idle" | "confirm" | "holding" | "clearing">("idle");
   const [holdProgress, setHoldProgress] = useState(0);
@@ -100,25 +49,9 @@ export default function Home() {
 
   const flights        = useAppStore((s) => s.flights);
   const isLoading      = useAppStore((s) => s.isLoading);
-  const activeTab      = useAppStore((s) => s.activeTab);
-  const setActiveTab   = useAppStore((s) => s.setActiveTab);
   const setFlights     = useAppStore((s) => s.setFlights);
   const setLoading     = useAppStore((s) => s.setLoading);
   const applyRealtimeEvent = useAppStore((s) => s.applyRealtimeEvent);
-
-  // Scroll to a specific date group after the tab has rendered
-  useEffect(() => {
-    if (!selectedDate) return;
-    let raf1: number, raf2: number;
-    raf1 = requestAnimationFrame(() => {
-      raf2 = requestAnimationFrame(() => {
-        const el = document.getElementById(`date-group-${selectedDate}`);
-        if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
-        setSelectedDate(null);
-      });
-    });
-    return () => { cancelAnimationFrame(raf1); cancelAnimationFrame(raf2); };
-  }, [selectedDate, activeTab]);
 
   const fetchFlights = useCallback(async () => {
     setLoading(true);
@@ -136,100 +69,53 @@ export default function Home() {
     const channel = supabase
       .channel("flights-live")
       .on("postgres_changes", { event: "*", schema: "public", table: "flights" }, (payload) => {
-        applyRealtimeEvent(payload.eventType as "INSERT" | "UPDATE" | "DELETE",
-          (payload.new ?? payload.old) as DbFlight);
+        applyRealtimeEvent(
+          payload.eventType as "INSERT" | "UPDATE" | "DELETE",
+          (payload.new ?? payload.old) as DbFlight
+        );
       })
       .subscribe();
     return () => { supabase.removeChannel(channel); };
   }, [fetchFlights, applyRealtimeEvent]);
 
-  // ── Search filter ─────────────────────────────────────────────────────────
+  // ── Stats (all flights, not filtered) ────────────────────────────────────
+
+  const stats = useMemo(() => ({
+    total:      flights.length,
+    arrivals:   flights.filter((f) => f.type === "Arrival").length,
+    departures: flights.filter((f) => f.type === "Departure").length,
+    tours:      flights.filter((f) => f.type === "Tour").length,
+    completed:  flights.filter((f) => f.completed).length,
+    cancelled:  flights.filter((f) => f.status === "Cancelled").length,
+    pending:    flights.filter((f) => !f.completed && f.status !== "Cancelled").length,
+  }), [flights]);
+
+  // ── Unique dates in the data ──────────────────────────────────────────────
+
+  const availableDates = useMemo(
+    () => [...new Set(flights.map((f) => f.date))].sort(),
+    [flights]
+  );
+
+  // ── Filtered list ─────────────────────────────────────────────────────────
 
   const filteredFlights = useMemo(() => {
-    const q = searchQuery.trim().toLowerCase();
-    if (!q) return flights;
-    return flights.filter(
-      (f) =>
-        f.pax_name.toLowerCase().includes(q) ||
-        f.flight_number.toLowerCase().includes(q) ||
-        f.driver_info.toLowerCase().includes(q) ||
-        f.agent.toLowerCase().includes(q) ||
-        f.file_ref.toLowerCase().includes(q)
-    );
-  }, [flights, searchQuery]);
-
-  // ── Partition flights into tab buckets ────────────────────────────────────
-
-  const buckets = useMemo(() => {
-    const sgt = new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Singapore" });
-    const nowMs = Date.now();
-
-    const today: Flight[]     = [];
-    const upcoming: Flight[]  = [];
-    const past: Flight[]      = [];
-    const delayed: Flight[]   = [];
-    const cancelled: Flight[] = [];
-
-    for (const f of filteredFlights) {
-      if (f.status === "Delayed")   { delayed.push(f);   continue; }
-      if (f.status === "Cancelled") { cancelled.push(f); continue; }
-
-      if (f.date < sgt)       past.push(f);
-      else if (f.date === sgt) today.push(f);
-      else                     upcoming.push(f);
+    let result = flights;
+    if (activeType !== "All") result = result.filter((f) => f.type === activeType);
+    if (activeDate !== "All") result = result.filter((f) => f.date === activeDate);
+    if (searchQuery.trim()) {
+      const q = searchQuery.trim().toLowerCase();
+      result = result.filter(
+        (f) =>
+          f.pax_name.toLowerCase().includes(q) ||
+          f.flight_number.toLowerCase().includes(q) ||
+          f.driver_info.toLowerCase().includes(q) ||
+          f.agent.toLowerCase().includes(q) ||
+          f.file_ref.toLowerCase().includes(q)
+      );
     }
-
-    const upcomingByDate = new Map<string, Flight[]>();
-    for (const f of upcoming) {
-      const arr = upcomingByDate.get(f.date) ?? [];
-      arr.push(f);
-      upcomingByDate.set(f.date, arr);
-    }
-
-    const pastByDate = new Map<string, Flight[]>();
-    for (const f of past) {
-      const arr = pastByDate.get(f.date) ?? [];
-      arr.push(f);
-      pastByDate.set(f.date, arr);
-    }
-
-    const todayUpcoming  = today.filter((f) => new Date(f.scheduledISO).getTime() > nowMs);
-    const todayCompleted = today.filter((f) => new Date(f.scheduledISO).getTime() <= nowMs);
-
-    return {
-      sgt,
-      today,
-      todayUpcoming,
-      todayCompleted,
-      upcomingGroups: [...upcomingByDate.entries()]
-        .sort(([a], [b]) => a.localeCompare(b))
-        .map(([date, fs]) => ({ date, flights: fs })),
-      pastGroups: [...pastByDate.entries()]
-        .sort(([a], [b]) => b.localeCompare(a))
-        .map(([date, fs]) => ({ date, flights: fs })),
-      delayed,
-      cancelled,
-    };
-  }, [filteredFlights]);
-
-  const counts: Record<TabId, number> = {
-    today:     buckets.today.length,
-    upcoming:  buckets.upcomingGroups.reduce((n, g) => n + g.flights.length, 0),
-    past:      buckets.pastGroups.reduce((n, g)     => n + g.flights.length, 0),
-    delayed:   buckets.delayed.length,
-    cancelled: buckets.cancelled.length,
-  };
-
-  // Active tab's full flat list (for export)
-  const activeFlights = useMemo(() => {
-    switch (activeTab) {
-      case "today":     return buckets.today;
-      case "upcoming":  return buckets.upcomingGroups.flatMap((g) => g.flights);
-      case "past":      return buckets.pastGroups.flatMap((g) => g.flights);
-      case "delayed":   return buckets.delayed;
-      case "cancelled": return buckets.cancelled;
-    }
-  }, [activeTab, buckets]);
+    return result;
+  }, [flights, activeType, activeDate, searchQuery]);
 
   // ── Clear logic ───────────────────────────────────────────────────────────
 
@@ -264,7 +150,7 @@ export default function Home() {
     setHoldProgress(0);
   }, []);
 
-  // ── Upload overlay ─────────────────────────────────────────────────────────
+  // ── Upload overlay ────────────────────────────────────────────────────────
 
   if (showUpload) {
     return (
@@ -283,183 +169,200 @@ export default function Home() {
     );
   }
 
-  // ── Main render ────────────────────────────────────────────────────────────
+  // ── Main render ───────────────────────────────────────────────────────────
 
   return (
     <div className="min-h-screen bg-background text-foreground flex flex-col">
-      <TopNav onUploadClick={() => setShowUpload(true)} />
+      <TopNav onUploadClick={() => setShowUpload(true)} onAfterSync={fetchFlights} />
 
-      <main className="flex-1 w-full max-w-5xl mx-auto px-4 py-6 flex flex-col">
+      <main className="flex-1 w-full max-w-5xl mx-auto px-4 py-5 flex flex-col gap-4">
 
-        <StatsRow />
-
-        {/* ── Weekly overview strip ── */}
-        <WeeklyStrip
-          flights={flights}
-          onDayClick={(date) => {
-            const sgt = new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Singapore" });
-            if (date === sgt) setActiveTab("today");
-            else if (date > sgt) setActiveTab("upcoming");
-            else setActiveTab("past");
-            setSelectedDate(date);
-          }}
-        />
-
-        {/* ── Search bar + Export ── */}
-        {flights.length > 0 && (
-          <div className="flex items-center gap-2 mb-4">
-            <div className="relative flex-1">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-zinc-600" />
-              <input
-                type="text"
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                placeholder="Search pax, flight, driver…"
-                className="w-full bg-zinc-900/60 border border-zinc-800 rounded-lg pl-9 pr-8 py-2 text-xs font-mono text-zinc-300 placeholder-zinc-600 focus:outline-none focus:border-zinc-600 transition-colors"
-              />
-              {searchQuery && (
-                <button
-                  onClick={() => setSearchQuery("")}
-                  className="absolute right-3 top-1/2 -translate-y-1/2 text-zinc-600 hover:text-zinc-400"
-                >
-                  <X className="w-3 h-3" />
-                </button>
-              )}
-            </div>
-            {activeFlights.length > 0 && (
-              <button
-                onClick={() => exportCsv(activeFlights, activeTab)}
-                title="Export current view as CSV"
-                className="flex items-center gap-1.5 px-3 py-2 rounded-lg border border-zinc-800 bg-zinc-900/60 text-xs font-mono text-zinc-500 hover:text-zinc-300 hover:border-zinc-600 transition-colors"
-              >
-                <Download className="w-3.5 h-3.5" />
-                <span className="hidden sm:inline">Export</span>
-              </button>
-            )}
-            <ApiUsageCounter />
+        {/* ── Live status bar ── */}
+        <div className="flex items-center justify-between text-xs font-mono text-zinc-500">
+          <span>{dateRangeString(availableDates)}</span>
+          <div className="flex items-center gap-1.5">
+            <span className="w-2 h-2 rounded-full bg-emerald-500 inline-block" />
+            <span className="text-emerald-400 font-semibold">LIVE</span>
+            <span className="text-zinc-600">· {flights.length} jobs</span>
           </div>
-        )}
+        </div>
 
-        {/* ── Tab bar ── */}
-        <div className="flex gap-1.5 flex-wrap mb-6 p-1 rounded-xl bg-zinc-900/60 border border-zinc-800">
-          {TABS.map(({ id, label, Icon }) => {
-            const active = activeTab === id;
-            const count  = counts[id];
+        {/* ── Stats grid (7 columns) ── */}
+        <div className="grid grid-cols-4 sm:grid-cols-7 gap-2">
+          {([
+            ["Total",      stats.total,      "#60a5fa"],
+            ["Arrivals",   stats.arrivals,   "#4ade80"],
+            ["Departures", stats.departures, "#60a5fa"],
+            ["Tours",      stats.tours,      "#f59e0b"],
+            ["Completed",  stats.completed,  "#4ade80"],
+            ["Cancelled",  stats.cancelled,  "#f87171"],
+            ["Pending",    stats.pending,    "#fbbf24"],
+          ] as [string, number, string][]).map(([label, value, color]) => (
+            <div
+              key={label}
+              className="rounded-xl p-2.5 text-center"
+              style={{ background: "#111827", border: "1px solid #1f2937" }}
+            >
+              <div className="text-xl font-bold font-mono tabular-nums" style={{ color, lineHeight: 1 }}>
+                {value}
+              </div>
+              <div className="text-[9px] text-zinc-500 mt-1.5 uppercase tracking-wider font-mono">
+                {label}
+              </div>
+            </div>
+          ))}
+        </div>
+
+        {/* ── Search ── */}
+        <div className="relative">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-zinc-600" />
+          <input
+            type="text"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            placeholder="Search passenger · flight · driver · file ref · agent…"
+            className="w-full rounded-lg pl-9 pr-8 py-2.5 text-xs font-mono text-zinc-300 placeholder-zinc-600 focus:outline-none transition-colors"
+            style={{ background: "#111827", border: "1px solid #1f2937" }}
+          />
+          {searchQuery && (
+            <button
+              onClick={() => setSearchQuery("")}
+              className="absolute right-3 top-1/2 -translate-y-1/2 text-zinc-600 hover:text-zinc-400"
+            >
+              <X className="w-3 h-3" />
+            </button>
+          )}
+        </div>
+
+        {/* ── Type tabs ── */}
+        <div className="flex gap-2 flex-wrap">
+          {TYPE_TABS.map(({ id, label, Icon, accent }) => {
+            const active = activeType === id;
+            const count = id === "All" ? stats.total
+              : id === "Arrival" ? stats.arrivals
+              : id === "Departure" ? stats.departures
+              : stats.tours;
             return (
               <button
                 key={id}
-                onClick={() => setActiveTab(id)}
-                className={`flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-mono font-medium transition-all flex-1 justify-center
-                  ${active
-                    ? "bg-white text-black shadow"
-                    : "text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800/60"
-                  }`}
+                onClick={() => setActiveType(id)}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-mono font-semibold transition-all"
+                style={{
+                  border: `1px solid ${active ? accent : "#374151"}`,
+                  background: active ? accent + "22" : "transparent",
+                  color: active ? accent : "#6b7280",
+                }}
               >
-                <Icon className="w-3.5 h-3.5" />
-                <span className="hidden sm:inline">{label}</span>
-                {count > 0 && (
-                  <span
-                    className={`text-[10px] font-bold px-1.5 py-0.5 rounded-full tabular-nums
-                      ${active ? "bg-black/10 text-black" : "bg-zinc-800 text-zinc-400"}`}
-                  >
-                    {count}
-                  </span>
-                )}
+                {Icon && <Icon className="w-3.5 h-3.5" />}
+                {label}
+                <span
+                  className="rounded px-1 text-[10px]"
+                  style={{ background: "rgba(255,255,255,0.08)" }}
+                >
+                  {count}
+                </span>
               </button>
             );
           })}
         </div>
 
-        {/* ── Tab content ── */}
+        {/* ── Date chips ── */}
+        {availableDates.length > 0 && (
+          <div className="flex gap-2 flex-wrap">
+            <button
+              onClick={() => setActiveDate("All")}
+              className="px-3 py-1 rounded-full text-xs font-mono transition-all"
+              style={{
+                border: `1px solid ${activeDate === "All" ? "#4b5563" : "#1f2937"}`,
+                background: activeDate === "All" ? "#1f2937" : "transparent",
+                color: activeDate === "All" ? "#f1f5f9" : "#6b7280",
+                fontWeight: activeDate === "All" ? 600 : 400,
+              }}
+            >
+              All Dates
+            </button>
+            {availableDates.map((d) => {
+              const cnt = flights.filter((f) => f.date === d).length;
+              const active = activeDate === d;
+              return (
+                <button
+                  key={d}
+                  onClick={() => setActiveDate(active ? "All" : d)}
+                  className="flex items-center gap-1 px-3 py-1 rounded-full text-xs font-mono transition-all"
+                  style={{
+                    border: `1px solid ${active ? "#4b5563" : "#1f2937"}`,
+                    background: active ? "#1f2937" : "transparent",
+                    color: active ? "#f1f5f9" : "#6b7280",
+                    fontWeight: active ? 600 : 400,
+                  }}
+                >
+                  {dateChipLabel(d)}
+                  <span className="text-[10px] text-blue-400">{cnt}</span>
+                </button>
+              );
+            })}
+          </div>
+        )}
+
+        {/* ── Results count ── */}
+        {flights.length > 0 && (
+          <div className="text-xs font-mono text-zinc-500">
+            Showing{" "}
+            <strong className="text-white">{filteredFlights.length}</strong>{" "}
+            of {flights.length} jobs
+            {searchQuery && (
+              <> · <em className="text-blue-300 not-italic">"{searchQuery}"</em></>
+            )}
+          </div>
+        )}
+
+        {/* ── Cards ── */}
         {isLoading ? (
           <div className="flex items-center justify-center py-20 text-zinc-500 gap-3">
             <Loader2 className="w-5 h-5 animate-spin" />
             <span className="text-sm font-mono">Fetching live data…</span>
           </div>
+        ) : flights.length === 0 ? (
+          <div className="flex flex-col items-center justify-center py-16 text-zinc-600 gap-3">
+            <Radio className="w-7 h-7" />
+            <p className="text-sm">Nothing here.</p>
+            <button
+              onClick={() => setShowUpload(true)}
+              className="text-xs text-[#00f3ff] hover:underline font-mono"
+            >
+              Upload a schedule →
+            </button>
+          </div>
+        ) : filteredFlights.length === 0 ? (
+          <div className="flex flex-col items-center justify-center py-16 text-zinc-600 gap-3">
+            <Search className="w-7 h-7" />
+            <p className="text-sm">No jobs match your filters.</p>
+            <button
+              onClick={() => { setActiveType("All"); setActiveDate("All"); setSearchQuery(""); }}
+              className="text-xs text-zinc-500 hover:text-zinc-300 font-mono"
+            >
+              Clear filters
+            </button>
+          </div>
         ) : (
-          <div className="flex-1">
+          <div className="flex flex-col gap-2">
+            {filteredFlights.map((f) => <FlightCard key={f.id} {...f} />)}
+          </div>
+        )}
 
-            {/* TODAY */}
-            {activeTab === "today" && (
-              buckets.today.length === 0 ? (
-                <EmptyTab onUpload={() => setShowUpload(true)} />
-              ) : (
-                <>
-                  {buckets.todayUpcoming.length > 0 && (
-                    <DayGroup
-                      date={buckets.sgt}
-                      flights={buckets.todayUpcoming}
-                    />
-                  )}
-                  {buckets.todayCompleted.length > 0 && (
-                    <div className="mb-6">
-                      <div className="flex items-center gap-2 mb-3">
-                        <span className="text-[10px] uppercase tracking-widest text-zinc-600 font-mono font-semibold">
-                          Completed
-                        </span>
-                        <span className="text-[10px] text-zinc-700 font-mono">· {buckets.todayCompleted.length}</span>
-                        <div className="flex-1 h-px bg-zinc-800 ml-1" />
-                      </div>
-                      {buckets.todayCompleted.map((f) => <FlightCard key={f.id} {...f} isPast />)}
-                    </div>
-                  )}
-                </>
-              )
-            )}
-
-            {/* UPCOMING */}
-            {activeTab === "upcoming" && (
-              buckets.upcomingGroups.length === 0 ? (
-                <EmptyTab onUpload={() => setShowUpload(true)} />
-              ) : (
-                buckets.upcomingGroups.map(({ date, flights }) => (
-                  <DayGroup key={date} date={date} flights={flights} />
-                ))
-              )
-            )}
-
-            {/* PAST */}
-            {activeTab === "past" && (
-              buckets.pastGroups.length === 0 ? (
-                <EmptyTab onUpload={() => setShowUpload(true)} />
-              ) : (
-                buckets.pastGroups.map(({ date, flights }) => (
-                  <DayGroup key={date} date={date} flights={flights} isPast />
-                ))
-              )
-            )}
-
-            {/* DELAYED */}
-            {activeTab === "delayed" && (
-              buckets.delayed.length === 0 ? (
-                <div className="flex flex-col items-center justify-center py-16 text-zinc-600 gap-3">
-                  <AlertTriangle className="w-7 h-7" />
-                  <p className="text-sm">No delayed transfers.</p>
-                </div>
-              ) : (
-                buckets.delayed.map((f) => <FlightCard key={f.id} {...f} />)
-              )
-            )}
-
-            {/* CANCELLED */}
-            {activeTab === "cancelled" && (
-              buckets.cancelled.length === 0 ? (
-                <div className="flex flex-col items-center justify-center py-16 text-zinc-600 gap-3">
-                  <XCircle className="w-7 h-7" />
-                  <p className="text-sm">No cancelled transfers.</p>
-                </div>
-              ) : (
-                buckets.cancelled.map((f) => <FlightCard key={f.id} {...f} />)
-              )
-            )}
-
+        {/* ── Footer ── */}
+        {flights.length > 0 && (
+          <div
+            className="text-center text-[11px] text-zinc-600 font-mono pt-4"
+            style={{ borderTop: "1px solid #1f2937" }}
+          >
+            LAT Ops Flight Monitor · {flights.length} jobs · All times SGT (UTC+8)
           </div>
         )}
 
         {/* ── Clear All Data ── */}
         {flights.length > 0 && (
-          <div className="mt-10 mb-2 flex flex-col items-center gap-3">
-
+          <div className="mb-2 flex flex-col items-center gap-3">
             {clearStage === "idle" && (
               <button
                 onClick={() => setClearStage("confirm")}
@@ -477,17 +380,29 @@ export default function Home() {
                     : "Keep holding…"}
                 </p>
                 <div
-                  className="relative w-full h-10 rounded-lg overflow-hidden border border-red-900/60 cursor-pointer select-none"
-                  onMouseDown={startHold} onMouseUp={cancelHold} onMouseLeave={cancelHold}
-                  onTouchStart={startHold} onTouchEnd={cancelHold}
+                  className="relative w-full h-10 rounded-lg overflow-hidden cursor-pointer select-none"
+                  style={{ border: "1px solid rgba(127,29,29,0.6)" }}
+                  onMouseDown={startHold}
+                  onMouseUp={cancelHold}
+                  onMouseLeave={cancelHold}
+                  onTouchStart={startHold}
+                  onTouchEnd={cancelHold}
                 >
-                  <div className="absolute inset-y-0 left-0 bg-red-900/60 transition-none" style={{ width: `${holdProgress}%` }} />
+                  <div
+                    className="absolute inset-y-0 left-0 transition-none"
+                    style={{ width: `${holdProgress}%`, background: "rgba(127,29,29,0.6)" }}
+                  />
                   <div className="relative z-10 flex items-center justify-center h-full gap-2 text-xs font-mono uppercase tracking-widest text-red-400">
                     <Trash2 className="w-3.5 h-3.5" />
-                    {clearStage === "confirm" ? "Hold to Delete All" : `Deleting… ${Math.round(holdProgress)}%`}
+                    {clearStage === "confirm"
+                      ? "Hold to Delete All"
+                      : `Deleting… ${Math.round(holdProgress)}%`}
                   </div>
                 </div>
-                <button onClick={resetClear} className="text-[10px] text-zinc-600 hover:text-zinc-400 font-mono uppercase tracking-widest transition-colors">
+                <button
+                  onClick={resetClear}
+                  className="text-[10px] text-zinc-600 hover:text-zinc-400 font-mono uppercase tracking-widest transition-colors"
+                >
                   Cancel
                 </button>
               </div>

@@ -1,7 +1,7 @@
 import { create } from "zustand";
 
 export type TransferStatus = "On Time" | "Delayed" | "Cancelled";
-export type TransferType = "Arrival" | "Departure";
+export type TransferType = "Arrival" | "Departure" | "Tour";
 
 // UI-layer flight (what components consume)
 export interface Flight {
@@ -46,7 +46,7 @@ export interface DbFlight {
   flight_number: string | null;
   agent: string | null;
   terminal: string | null;
-  type: "Arrival" | "Departure";
+  type: "Arrival" | "Departure" | "Tour";
   scheduled_time: string;   // ISO 8601 / TIMESTAMPTZ
   updated_time: string | null;
   driver_info: string | null;
